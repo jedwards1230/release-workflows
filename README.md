@@ -41,7 +41,7 @@ Calculates the next semantic version based on the latest Git tags and generates 
 ```yaml
 jobs:
   calculate-version:
-    uses: jedwards1230/release-workflows/.github/workflows/calculate-version.yml@v1
+    uses: jedwards1230/release-workflows/.github/workflows/calculate-version.yml@v0
     with:
       version_type: "minor"
       working_directory: "."
@@ -79,7 +79,7 @@ Creates a GitHub release with proper tagging, changelog, and artifact handling.
 ```yaml
 jobs:
   release:
-    uses: jedwards1230/release-workflows/.github/workflows/generic-release.yml@v1
+    uses: jedwards1230/release-workflows/.github/workflows/generic-release.yml@v0
     with:
       new_version: ${{ needs.calculate-version.outputs.new_version }}
       current_version: ${{ needs.calculate-version.outputs.current_version }}
@@ -124,7 +124,7 @@ permissions:
 
 jobs:
   calculate-version:
-    uses: jedwards1230/release-workflows/.github/workflows/calculate-version.yml@v1
+    uses: jedwards1230/release-workflows/.github/workflows/calculate-version.yml@v0
     with:
       version_type: ${{ github.event.inputs.version_type }}
       custom_version: ${{ github.event.inputs.custom_version }}
@@ -151,7 +151,7 @@ jobs:
 
   release:
     needs: [calculate-version, build]
-    uses: jedwards1230/release-workflows/.github/workflows/generic-release.yml@v1
+    uses: jedwards1230/release-workflows/.github/workflows/generic-release.yml@v0
     with:
       new_version: ${{ needs.calculate-version.outputs.new_version }}
       current_version: ${{ needs.calculate-version.outputs.current_version }}
@@ -167,8 +167,8 @@ jobs:
 
 You can pin to specific versions of these workflows:
 
-- **Latest stable**: `@v1` (recommended for production)
-- **Specific version**: `@v1.2.3` (for maximum stability)
+- **Latest stable**: `@v0` (recommended for production)
+- **Specific version**: `@v0.0.1` (for maximum stability)
 - **Latest changes**: `@main` (for development/testing)
 
 ## Tagging Strategy
