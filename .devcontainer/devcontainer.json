@@ -1,0 +1,13 @@
+{
+  "name": "release-workflows",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "postStartCommand": "bash .devcontainer/entrypoint.sh",
+  "customizations": {
+    "vscode": {
+      "terminal.integrated.defaultProfile.linux": "bash",
+      "extensions": ["redhat.vscode-yaml"]
+    }
+  }
+}
