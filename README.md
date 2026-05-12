@@ -129,7 +129,7 @@ permissions:
 
 jobs:
   check:
-    uses: jedwards1230/release-workflows/.github/workflows/check-plugin-versions.yml@v1
+    uses: jedwards1230/release-workflows/.github/workflows/check-plugin-versions.yml@v0
     secrets: inherit
 ```
 
