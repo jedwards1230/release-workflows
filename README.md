@@ -99,7 +99,7 @@ Validates [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugi
 - No `version` field on marketplace plugin entries (silently ignored per the [plugins reference](https://code.claude.com/docs/en/plugins-reference#version-resolution-and-release-channels) — `plugin.json` wins)
 - Posts a PR comment summarizing added / removed / updated plugins
 
-The bundled `scripts/check-plugin-versions.sh` is checked out at the same ref the caller uses, so the workflow YAML and the script never drift.
+The check logic is inlined in the workflow itself so consumers don't need cross-repo checkout access (this repo is private — same-owner workflow reuse via `uses:` works, but the runtime `GITHUB_TOKEN` can't read a second private repo). The standalone `scripts/check-plugin-versions.sh` is kept as the canonical bash source for local pre-push validation; both files must be kept in sync when the logic changes.
 
 #### Inputs
 

@@ -10,6 +10,12 @@
 # entry is silently ignored when plugin.json also sets it. This script
 # fails if it finds a `version` field on any marketplace plugin entry.
 #
+# IMPORTANT: this script is the canonical bash source for the check logic,
+# kept for local pre-push validation. The CI workflow in
+# .github/workflows/check-plugin-versions.yml inlines the same logic in a
+# `run:` block (this repo is private, so the workflow can't checkout itself
+# at runtime to source the script). When changing logic, update BOTH files.
+#
 # Usage: ./scripts/check-plugin-versions.sh <base-ref>
 #   base-ref: Git reference to compare against (e.g., origin/main)
 #
