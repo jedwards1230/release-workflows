@@ -3,7 +3,9 @@
 ![Version](https://img.shields.io/github/v/release/jedwards1230/release-workflows?style=flat-square&color=blue)
 ![License](https://img.shields.io/github/license/jedwards1230/release-workflows?style=flat-square)
 
-Reusable GitHub Actions workflows for automated release management with semantic versioning, changelog generation, GitHub releases, and Claude Code plugin marketplace validation.
+Reusable GitHub Actions workflows for automated release management with semantic versioning, changelog generation, and GitHub releases.
+
+For Claude Code plugin marketplace validation, see [jedwards1230/claude-plugin-actions](https://github.com/jedwards1230/claude-plugin-actions).
 
 ## Features
 
@@ -11,7 +13,6 @@ Reusable GitHub Actions workflows for automated release management with semantic
 - **Changelog Generation**: Creates detailed changelogs from commit history
 - **GitHub Releases**: Creates releases with artifacts and proper tagging
 - **Moving Tags**: Maintains major and minor version tags (e.g., `v1`, `v1.2`) for easy consumption
-- **Plugin Version Validation**: Enforces version bumps and marketplace hygiene for Claude Code plugin marketplaces
 - **Flexible Configuration**: Supports custom versions, working directories, and release options
 
 ## Workflows
@@ -87,49 +88,6 @@ jobs:
       changelog_content: ${{ needs.calculate-version.outputs.changelog_content }}
       create_release: true
       artifacts_pattern: "dist/*"
-    secrets: inherit
-```
-
-### 3. Plugin Version Check (`check-plugin-versions.yml`)
-
-Validates [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces) hygiene on every PR and push:
-
-- `plugin.json` `version` is bumped whenever files under `plugins/<name>/` change
-- `marketplace.json` `metadata.version` is bumped when the catalog changes
-- No `version` field on marketplace plugin entries (silently ignored per the [plugins reference](https://code.claude.com/docs/en/plugins-reference#version-resolution-and-release-channels) — `plugin.json` wins)
-- Posts a PR comment summarizing added / removed / updated plugins
-
-The bundled `scripts/check-plugin-versions.sh` is checked out at the same ref the caller uses, so the workflow YAML and the script never drift.
-
-#### Inputs
-
-| Input | Description | Required | Default |
-|-------|-------------|----------|---------|
-| `marketplace-path` | Path to `marketplace.json` relative to repo root | No | `.claude-plugin/marketplace.json` |
-| `plugins-dir` | Directory containing plugin subdirectories (matches `metadata.pluginRoot`) | No | `plugins` |
-| `base-ref` | Git ref to compare against | No | PR base SHA, or `HEAD~1` on push |
-| `post-pr-comment` | Post a PR comment summarizing plugin changes | No | `true` |
-
-#### Example Usage (consuming repo)
-
-```yaml
-name: Plugin Version Check
-
-on:
-  push:
-    branches: [main]
-    paths: ['plugins/**', '.claude-plugin/marketplace.json']
-  pull_request:
-    types: [opened, synchronize]
-    paths: ['plugins/**', '.claude-plugin/marketplace.json']
-
-permissions:
-  contents: read
-  pull-requests: write
-
-jobs:
-  check:
-    uses: jedwards1230/release-workflows/.github/workflows/check-plugin-versions.yml@v0
     secrets: inherit
 ```
 
