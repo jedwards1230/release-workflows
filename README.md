@@ -121,7 +121,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   calculate-version:
@@ -137,15 +136,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@v6
+
       - name: Build project
         run: |
           # Add your build steps here
           echo "Building version ${{ needs.calculate-version.outputs.new_version }}"
-          
+
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-binaries
           path: dist/
