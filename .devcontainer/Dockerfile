@@ -6,15 +6,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ca-certificates \
     unzip \
+    shellcheck \
     && rm -rf /var/lib/apt/lists/*
 
 # yq (YAML processor)
-RUN curl -fsSL https://github.com/mikefarah/yq/releases/download/v4.52.4/yq_linux_amd64 \
+ARG YQ_VERSION=v4.52.4
+RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
     -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
 
-# ShellCheck for script validation
-RUN apt-get update && apt-get install -y --no-install-recommends shellcheck \
-    && rm -rf /var/lib/apt/lists/*
-
 # actionlint (GitHub Actions linter)
-RUN curl -fsSL https://github.com/rhysd/actionlint/releases/latest/download/actionlint_$(curl -fsSL https://api.github.com/repos/rhysd/actionlint/releases/latest | jq -r '.tag_name' | sed 's/v//')_linux_amd64.tar.gz | tar -xz -C /usr/local/bin actionlint
+ARG ACTIONLINT_VERSION=1.7.12
+RUN curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+    | tar -xz -C /usr/local/bin actionlint
