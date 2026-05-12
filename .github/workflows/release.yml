@@ -29,7 +29,6 @@ on:
 
 permissions:
     contents: write
-    pull-requests: write
 
 jobs:
     calculate-version:
@@ -52,6 +51,5 @@ jobs:
             prerelease: ${{ github.event.inputs.prerelease == 'true' }}
             create_release: true
             artifacts_pattern: ""
-            update_badge_file: "README.md"
             working_directory: "."
         secrets: inherit
