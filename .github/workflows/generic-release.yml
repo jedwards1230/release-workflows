@@ -38,11 +38,6 @@ on:
                 description: "Glob pattern for release artifacts (optional)"
                 required: false
                 type: string
-            update_badge_file:
-                description: "File to update version badge in (e.g., README.md)"
-                required: false
-                type: string
-                default: "README.md"
             working_directory:
                 description: "Working directory for the workflow"
                 required: false
@@ -58,7 +53,6 @@ on:
 
 permissions:
     contents: write
-    pull-requests: write
 
 jobs:
     release:
@@ -69,7 +63,7 @@ jobs:
 
         steps:
             - name: Checkout code
-              uses: actions/checkout@v4
+              uses: actions/checkout@v6
               with:
                   fetch-depth: 0
                   token: ${{ secrets.GITHUB_TOKEN }}
@@ -85,14 +79,14 @@ jobs:
 
             - name: Download changelog artifact
               if: inputs.changelog_artifact_name != ''
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   name: ${{ inputs.changelog_artifact_name }}
                   path: ${{ inputs.working_directory }}
 
             - name: Download release artifacts
               if: inputs.artifacts_pattern != ''
-              uses: actions/download-artifact@v4
+              uses: actions/download-artifact@v8
               with:
                   name: release-binaries
                   path: ${{ inputs.working_directory }}/dist/
@@ -149,7 +143,7 @@ jobs:
             - name: Create release
               id: create_release
               if: inputs.create_release == true
-              uses: softprops/action-gh-release@v2
+              uses: softprops/action-gh-release@v3
               with:
                   tag_name: ${{ inputs.new_version }}
                   name: Release ${{ inputs.new_version }}
@@ -160,27 +154,6 @@ jobs:
                   generate_release_notes: true
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-            - name: Update version badge
-              if: inputs.update_badge_file != ''
-              working-directory: ${{ inputs.working_directory }}
-              run: |
-                  NEW_VERSION="${{ inputs.new_version }}"
-                  BADGE_FILE="${{ inputs.update_badge_file }}"
-
-                  # Update version badge if it exists
-                  if [ -f "${BADGE_FILE}" ] && grep -q "version-.*-blue" "${BADGE_FILE}"; then
-                    sed -i "s/version-.*-blue/version-${NEW_VERSION#v}-blue/g" "${BADGE_FILE}"
-                    
-                    # Commit and push if changes were made
-                    if git diff --quiet "${BADGE_FILE}"; then
-                      echo "No changes to ${BADGE_FILE}"
-                    else
-                      git add "${BADGE_FILE}"
-                      git commit -m "docs: update version badge to ${NEW_VERSION}"
-                      git push origin main
-                    fi
-                  fi
 
             - name: Summary
               run: |

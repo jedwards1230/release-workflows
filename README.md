@@ -66,7 +66,6 @@ Creates a GitHub release with proper tagging, changelog, and artifact handling.
 | `prerelease` | Mark as prerelease | No | `false` |
 | `create_release` | Create GitHub release | No | `true` |
 | `artifacts_pattern` | Glob pattern for release artifacts | No | - |
-| `update_badge_file` | File to update version badge in | No | `README.md` |
 | `working_directory` | Working directory for the workflow | No | `.` |
 
 #### Outputs
@@ -122,7 +121,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   calculate-version:
@@ -138,15 +136,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      
+        uses: actions/checkout@v6
+
       - name: Build project
         run: |
           # Add your build steps here
           echo "Building version ${{ needs.calculate-version.outputs.new_version }}"
-          
+
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-binaries
           path: dist/
@@ -161,7 +159,6 @@ jobs:
       draft: ${{ github.event.inputs.draft == 'true' }}
       create_release: true
       artifacts_pattern: "dist/*"
-      update_badge_file: "README.md"
     secrets: inherit
 ```
 
@@ -187,7 +184,7 @@ This allows for flexible version pinning in consuming repositories.
 
 - Repository must have semantic version tags (e.g., `v1.0.0`, `v1.2.3`)
 - Workflows require `contents: write` permissions for creating releases and tags
-- For badge updates, workflows need `pull-requests: write` permissions
+- For version badges, use the dynamic [shields.io endpoint](https://shields.io/badges/git-hub-release) (e.g., `https://img.shields.io/github/v/release/owner/repo`) — it auto-tracks the latest release without needing CI to rewrite the badge file
 
 ## Contributing
 
