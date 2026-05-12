@@ -1,0 +1,473 @@
+# Reusable workflow: compute the next version, optionally bump a Helm chart
+# version into the tagged commit, then assemble release notes (AI-generated
+# when ANTHROPIC_API_KEY is provided; native generate_release_notes
+# fallback otherwise). Outputs the tag, version, prev_tag, bump_type, and a
+# base64-encoded release body so the caller can chain build/publish jobs
+# before creating the GitHub Release.
+#
+# Extracted from an internal repo's release.yml (the gold-standard reference
+# audited 2026-05-12). See an internal repo internal docs/
+# release conventions for the standard this workflow implements.
+name: AI Release
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Short service identifier used in commit messages, e.g. 'my-app'"
+        required: true
+        type: string
+      service_description:
+        description: "One-line service description used in the AI prompt, e.g. 'a Go-based home automation agent'"
+        required: false
+        type: string
+        default: ""
+      bump_type:
+        description: "Version bump type: patch, minor, or major"
+        required: true
+        type: string
+      version_override:
+        description: "Explicit version (e.g. 1.2.3) — ignores bump_type when set"
+        required: false
+        type: string
+        default: ""
+      chart_path:
+        description: "Path to a Chart.yaml whose version + appVersion should be bumped (committed into tag, not pushed to main). Empty = skip."
+        required: false
+        type: string
+        default: ""
+      release_branch:
+        description: "Branch to release from"
+        required: false
+        type: string
+        default: "main"
+      dry_run:
+        description: "Compute and preview the release notes without creating a tag or release"
+        required: false
+        type: boolean
+        default: false
+      create_release:
+        description: "Create the GitHub Release directly. Set false if the caller needs build/publish jobs between tag and release."
+        required: false
+        type: boolean
+        default: false
+      latest:
+        description: "Mark the created release as 'latest' (only meaningful when create_release is true)"
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: "Anthropic API key for AI release notes. Workflow falls back to GitHub's native generate_release_notes when absent."
+        required: false
+    outputs:
+      tag:
+        description: "The release tag (e.g. v1.2.3)"
+        value: ${{ jobs.release.outputs.tag }}
+      version:
+        description: "The release version without the leading v (e.g. 1.2.3)"
+        value: ${{ jobs.release.outputs.version }}
+      prev_tag:
+        description: "The previous semver tag (or root commit if first release)"
+        value: ${{ jobs.release.outputs.prev_tag }}
+      changelog_ref:
+        description: "The ref used as the diff baseline for release notes (cumulative for minor/major)"
+        value: ${{ jobs.release.outputs.changelog_ref }}
+      bump_type:
+        description: "The resolved bump type (matches input or detected from version_override)"
+        value: ${{ jobs.release.outputs.bump_type }}
+      release_body:
+        description: "Base64-encoded release body markdown — pass to softprops/action-gh-release as body."
+        value: ${{ jobs.release.outputs.release_body }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: AI Release ${{ inputs.dry_run && '(dry run)' || '' }}
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      prev_tag: ${{ steps.version.outputs.prev_tag }}
+      changelog_ref: ${{ steps.version.outputs.changelog_ref }}
+      bump_type: ${{ steps.version.outputs.bump_type }}
+      release_body: ${{ steps.body.outputs.release_body }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.release_branch }}
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        env:
+          BUMP_TYPE_IN: ${{ inputs.bump_type }}
+          OVERRIDE: ${{ inputs.version_override }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1 || true)
+
+          if [ -z "$LATEST_TAG" ]; then
+            PREV_REF=$(git rev-list --max-parents=0 HEAD)
+            MAJOR=0; MINOR=0; PATCH=0
+            echo "No existing semver tags found, starting from 0.0.0"
+          else
+            PREV_REF="$LATEST_TAG"
+            LATEST_VERSION="${LATEST_TAG#v}"
+            MAJOR=$(echo "$LATEST_VERSION" | cut -d. -f1)
+            MINOR=$(echo "$LATEST_VERSION" | cut -d. -f2)
+            PATCH=$(echo "$LATEST_VERSION" | cut -d. -f3)
+            echo "Latest tag: $LATEST_TAG"
+          fi
+
+          BUMP_TYPE="$BUMP_TYPE_IN"
+          if [ -n "$OVERRIDE" ]; then
+            if ! echo "$OVERRIDE" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::Invalid version format '$OVERRIDE'. Expected: X.Y.Z"
+              exit 1
+            fi
+            NEXT_VERSION="$OVERRIDE"
+
+            OVERRIDE_MAJOR=$(echo "$OVERRIDE" | cut -d. -f1)
+            OVERRIDE_MINOR=$(echo "$OVERRIDE" | cut -d. -f2)
+            if [ "$OVERRIDE_MAJOR" -gt "$MAJOR" ]; then
+              BUMP_TYPE="major"
+            elif [ "$OVERRIDE_MINOR" -gt "$MINOR" ]; then
+              BUMP_TYPE="minor"
+            else
+              BUMP_TYPE="patch"
+            fi
+          else
+            case "$BUMP_TYPE" in
+              major) NEXT_VERSION="$((MAJOR + 1)).0.0" ;;
+              minor) NEXT_VERSION="${MAJOR}.$((MINOR + 1)).0" ;;
+              patch) NEXT_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+              *) echo "::error::Invalid bump_type '$BUMP_TYPE'"; exit 1 ;;
+            esac
+          fi
+
+          NEXT_TAG="v${NEXT_VERSION}"
+
+          if git rev-parse "$NEXT_TAG" >/dev/null 2>&1; then
+            if [ "$DRY_RUN" = "true" ]; then
+              PREV_REF=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | grep -B1 "^${NEXT_TAG}$" | head -1)
+              if [ "$PREV_REF" = "$NEXT_TAG" ]; then
+                PREV_REF=$(git rev-list --max-parents=0 HEAD)
+              fi
+              echo "Replay mode: diff range ${PREV_REF}..${NEXT_TAG}"
+            else
+              echo "::error::Tag $NEXT_TAG already exists"
+              exit 1
+            fi
+          fi
+
+          # Cumulative diff for minor/major: diff from the previous X.Y.0 / X.0.0 tag
+          # rather than the immediate predecessor, so the AI sees the full arc of the
+          # release rather than just the last patch.
+          CHANGELOG_REF="$PREV_REF"
+          case "$BUMP_TYPE" in
+            minor)
+              MINOR_BASE_TAG="v${MAJOR}.${MINOR}.0"
+              if git rev-parse "$MINOR_BASE_TAG" >/dev/null 2>&1; then
+                CHANGELOG_REF="$MINOR_BASE_TAG"
+                echo "Minor bump: using cumulative diff from $MINOR_BASE_TAG"
+              fi
+              ;;
+            major)
+              MAJOR_BASE_TAG="v${MAJOR}.0.0"
+              if git rev-parse "$MAJOR_BASE_TAG" >/dev/null 2>&1; then
+                CHANGELOG_REF="$MAJOR_BASE_TAG"
+                echo "Major bump: using cumulative diff from $MAJOR_BASE_TAG"
+              fi
+              ;;
+          esac
+
+          {
+            echo "version=${NEXT_VERSION}"
+            echo "tag=${NEXT_TAG}"
+            echo "prev_tag=${PREV_REF}"
+            echo "changelog_ref=${CHANGELOG_REF}"
+            echo "bump_type=${BUMP_TYPE}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Next version: $NEXT_VERSION (tag: $NEXT_TAG)"
+          echo "Changelog range: $CHANGELOG_REF..$NEXT_TAG"
+
+      - name: Update Chart.yaml version
+        if: inputs.dry_run != true && inputs.chart_path != ''
+        env:
+          NEXT_VERSION: ${{ steps.version.outputs.version }}
+          CHART_FILE: ${{ inputs.chart_path }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^version: .*/version: ${NEXT_VERSION}/" "$CHART_FILE"
+          sed -i "s/^appVersion: .*/appVersion: \"${NEXT_VERSION}\"/" "$CHART_FILE"
+          echo "Updated $CHART_FILE:"
+          grep -E '^(version|appVersion):' "$CHART_FILE"
+
+      - name: Commit version bump and create tag
+        if: inputs.dry_run != true
+        env:
+          NEXT_VERSION: ${{ steps.version.outputs.version }}
+          NEXT_TAG: ${{ steps.version.outputs.tag }}
+          CHART_FILE: ${{ inputs.chart_path }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Bump committed into the tagged commit only — NOT pushed to main. The tag
+          # carries the bumped manifest; downstream jobs check out the tag ref. This
+          # works with branch protection rules that reject direct pushes from CI.
+          if [ -n "$CHART_FILE" ] && ! git diff --quiet "$CHART_FILE"; then
+            git add "$CHART_FILE"
+            git commit -m "chore(${SERVICE_NAME}): bump chart version to ${NEXT_VERSION}"
+            echo "Committed chart version bump (included in tag, not pushed to main)"
+          fi
+
+          git tag -a "$NEXT_TAG" -m "Release ${NEXT_VERSION}"
+          git push origin "$NEXT_TAG"
+
+      - name: Collect release context
+        id: context
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          PREV_TAG: ${{ steps.version.outputs.prev_tag }}
+          CHANGELOG_REF: ${{ steps.version.outputs.changelog_ref }}
+          BUMP_TYPE: ${{ steps.version.outputs.bump_type }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          DIFF_TARGET="$TAG"
+          if ! git rev-parse "$TAG" >/dev/null 2>&1; then
+            DIFF_TARGET="HEAD"
+            echo "Tag $TAG not found — using HEAD for diff (dry run mode)"
+          fi
+
+          echo "Bump type: $BUMP_TYPE"
+          echo "Changelog range: ${CHANGELOG_REF}..${DIFF_TARGET}"
+
+          # Merge commits only — excludes direct-to-main pushes from release notes
+          git log --merges --pretty=format:"- %s (%h)" "${CHANGELOG_REF}..${DIFF_TARGET}" > /tmp/commits.txt
+          echo "" >> /tmp/commits.txt
+
+          # PR list scoped to the diff window. Strict > to avoid double-including
+          # the boundary PR from the previous release.
+          PREV_DATE=$(TZ=UTC git log -1 --date=iso-strict-local --format="%cd" "${CHANGELOG_REF}")
+          gh pr list --state merged --base "${{ inputs.release_branch }}" \
+            --search "merged:>${PREV_DATE}" \
+            --json number,title,author \
+            --jq '.[] | "- #\(.number) \(.title) (@\(.author.login))"' \
+            > /tmp/prs.txt 2>/dev/null || echo "No PRs found" > /tmp/prs.txt
+
+          # Diff — restricted to files touched by merge commits, null-delimited for
+          # safe handling of filenames with spaces.
+          git log --merges --name-only -z --pretty=format:"" "${CHANGELOG_REF}..${DIFF_TARGET}" \
+            | tr '\0\n' '\n\0' | grep -z '.' | sort -zu > /tmp/merge_files.txt || true
+          MERGE_FILES_COUNT=$(tr '\0' '\n' < /tmp/merge_files.txt | grep -c '.' || true)
+
+          if [ "$MERGE_FILES_COUNT" -gt 0 ]; then
+            xargs -0 git diff --stat "${CHANGELOG_REF}..${DIFF_TARGET}" -- \
+              < /tmp/merge_files.txt > /tmp/diffstat.txt
+            xargs -0 git diff "${CHANGELOG_REF}..${DIFF_TARGET}" -- \
+              < /tmp/merge_files.txt > /tmp/fulldiff.txt
+          else
+            echo "No PR-merged changes in this range" > /tmp/diffstat.txt
+            echo "No PR-merged changes in this range" > /tmp/fulldiff.txt
+          fi
+          truncate -s '<100K' /tmp/fulldiff.txt
+
+          echo "https://github.com/${REPO}/compare/${CHANGELOG_REF}...${TAG}" > /tmp/compare_url.txt
+
+          echo "Collected release context: $(wc -l < /tmp/commits.txt) commits, $(wc -c < /tmp/fulldiff.txt) diff bytes"
+
+      - name: Check for Anthropic API key
+        id: api_key
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "ANTHROPIC_API_KEY not set, will fall back to GitHub's native generate_release_notes"
+          fi
+
+      - name: Select model for release notes
+        id: model
+        env:
+          BUMP_TYPE: ${{ steps.version.outputs.bump_type }}
+        run: |
+          case "$BUMP_TYPE" in
+            minor|major)
+              echo "model=claude-sonnet-4-6" >> "$GITHUB_OUTPUT"
+              echo "Selected Sonnet for $BUMP_TYPE release (higher quality on cumulative notes)"
+              ;;
+            *)
+              echo "model=claude-haiku-4-5-20251001" >> "$GITHUB_OUTPUT"
+              echo "Selected Haiku for patch release (fast and cheap)"
+              ;;
+          esac
+
+      - name: Generate AI release notes
+        id: release_notes
+        if: steps.api_key.outputs.available == 'true'
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAG: ${{ steps.version.outputs.tag }}
+          CHANGELOG_REF: ${{ steps.version.outputs.changelog_ref }}
+          BUMP_TYPE: ${{ steps.version.outputs.bump_type }}
+          MODEL: ${{ steps.model.outputs.model }}
+          SERVICE_NAME: ${{ inputs.service_name }}
+          SERVICE_DESCRIPTION: ${{ inputs.service_description }}
+        run: |
+          set -euo pipefail
+
+          # Skip AI call when there's nothing to summarize
+          if [ ! -s /tmp/commits.txt ] || [ "$(wc -l < /tmp/commits.txt | tr -d ' ')" -le 1 ]; then
+            echo "No commits in diff range — skipping AI release notes"
+            exit 0
+          fi
+
+          echo "Using model: $MODEL"
+
+          CUMULATIVE_NOTE=""
+          if [ "$BUMP_TYPE" = "minor" ] || [ "$BUMP_TYPE" = "major" ]; then
+            CUMULATIVE_NOTE="This is a ${BUMP_TYPE} release. The diff below shows ALL changes since ${CHANGELOG_REF} (cumulative across all patch releases)."
+          fi
+
+          SERVICE_PHRASE="$SERVICE_NAME"
+          if [ -n "$SERVICE_DESCRIPTION" ]; then
+            SERVICE_PHRASE="${SERVICE_NAME} (${SERVICE_DESCRIPTION})"
+          fi
+
+          cat > /tmp/prompt.txt <<PROMPT
+          You are writing release notes for ${TAG} of ${SERVICE_PHRASE}.
+          Previous baseline: ${CHANGELOG_REF}
+          ${CUMULATIVE_NOTE}
+
+          Analyze the diff and write user-facing release notes.
+
+          Format requirements:
+          - Use markdown headers (##, ###)
+          - Start with a 1-2 sentence summary of the release
+          - Group into sections: Features, Breaking Changes, Bug Fixes, Improvements
+          - Only include sections that have content
+          - For breaking changes, include migration steps
+          - For features, briefly explain usage
+          - Be concise but informative
+          - Do NOT include a commit list (that will be appended separately)
+          - Do NOT include a changelog link (that will be appended separately)
+          PROMPT
+
+          jq -n \
+            --arg model "$MODEL" \
+            --rawfile prompt /tmp/prompt.txt \
+            --rawfile diffstat /tmp/diffstat.txt \
+            --rawfile diff /tmp/fulldiff.txt \
+            --rawfile commits /tmp/commits.txt \
+            --rawfile prs /tmp/prs.txt \
+            '{
+              model: $model,
+              max_tokens: 4096,
+              messages: [{
+                role: "user",
+                content: ($prompt + "\n\n## Commits\n" + $commits + "\n\n## Merged PRs\n" + $prs + "\n\n## Diff Stats\n" + $diffstat + "\n\n## Full Diff\n" + $diff)
+              }]
+            }' > /tmp/request.json
+
+          HTTP_CODE=$(curl -s --max-time 120 -w '%{http_code}' -o /tmp/response.json \
+            -X POST https://api.anthropic.com/v1/messages \
+            -H "content-type: application/json" \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -d @/tmp/request.json)
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Anthropic API ($MODEL) returned HTTP $HTTP_CODE"
+            cat /tmp/response.json
+            exit 1
+          fi
+
+          jq -r '.content[0].text' /tmp/response.json > /tmp/release_notes.txt
+          echo "Release notes generated ($(wc -c < /tmp/release_notes.txt) bytes)"
+
+      - name: Assemble release body
+        id: body
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          COMPARE_URL=$(cat /tmp/compare_url.txt)
+
+          if [ -f /tmp/release_notes.txt ] && [ -s /tmp/release_notes.txt ]; then
+            # Strip leading H1 — GitHub Release UI adds the title separately.
+            sed '1{/^#[[:space:]]/d}' /tmp/release_notes.txt > /tmp/release_body.md
+          else
+            echo "## Release ${TAG}" > /tmp/release_body.md
+            echo "" >> /tmp/release_body.md
+          fi
+
+          {
+            echo ""
+            echo "## Commits"
+            echo ""
+            cat /tmp/commits.txt
+            echo ""
+            echo "**Full Changelog**: ${COMPARE_URL}"
+          } >> /tmp/release_body.md
+
+          ENCODED=$(base64 -w 0 /tmp/release_body.md)
+          echo "release_body=${ENCODED}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: inputs.dry_run != true && inputs.create_release == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          LATEST_FLAG: ${{ inputs.latest && '--latest' || '' }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Release ${VERSION}" \
+            --notes-file /tmp/release_body.md \
+            $LATEST_FLAG
+
+      - name: Write workflow summary
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PREV_TAG: ${{ steps.version.outputs.prev_tag }}
+          CHANGELOG_REF: ${{ steps.version.outputs.changelog_ref }}
+          BUMP_TYPE: ${{ steps.version.outputs.bump_type }}
+          MODEL: ${{ steps.model.outputs.model }}
+          AI_OUTCOME: ${{ steps.release_notes.outcome }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## Release $TAG"
+            echo ""
+            echo "| Field | Value |"
+            echo "|-------|-------|"
+            echo "| Version | $VERSION |"
+            echo "| Bump type | $BUMP_TYPE |"
+            echo "| Previous tag | $PREV_TAG |"
+            echo "| Changelog from | $CHANGELOG_REF |"
+            echo "| AI notes | ${AI_OUTCOME:-skipped} ($MODEL) |"
+            echo "| Dry run | $DRY_RUN |"
+            echo ""
+            echo "### Release Notes"
+            echo ""
+            cat /tmp/release_body.md
+          } >> "$GITHUB_STEP_SUMMARY"
