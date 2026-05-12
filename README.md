@@ -39,7 +39,7 @@ Full kova-pattern release workflow: computes the next version (semver bump or ex
 
 | Secret | Required | Behavior |
 |--------|----------|----------|
-| `ANTHROPIC_API_KEY` | No | AI-generated notes (Haiku/Sonnet). Falls back to GitHub's native `generate_release_notes` if absent. |
+| `ANTHROPIC_API_KEY` | No | AI-generated notes (Haiku for patch, Sonnet for minor/major). When absent or the API call fails, the workflow falls back to GitHub's native release-notes API (`POST /repos/{owner}/{repo}/releases/generate-notes` — same content as `gh release create --generate-notes` produces). Final fallback (if both fail) is a minimal commit-list body. |
 
 #### Outputs
 
@@ -50,7 +50,7 @@ Full kova-pattern release workflow: computes the next version (semver bump or ex
 | `prev_tag` | Previous semver tag |
 | `changelog_ref` | Diff baseline used for release notes (cumulative for minor/major) |
 | `bump_type` | Resolved bump type |
-| `release_body` | Base64-encoded release body — pass to `softprops/action-gh-release` as `body` |
+| `release_body` | **Base64-encoded** release body markdown. Callers MUST decode before use — see the example below. Base64 is used because GitHub Actions strips newlines and limits character set on job outputs. |
 
 #### Example: caller creates the release after build/publish
 

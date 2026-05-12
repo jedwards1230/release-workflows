@@ -77,11 +77,12 @@ on:
         description: "The resolved bump type (matches input or detected from version_override)"
         value: ${{ jobs.release.outputs.bump_type }}
       release_body:
-        description: "Base64-encoded release body markdown — pass to softprops/action-gh-release as body."
+        description: "Base64-encoded release body markdown. Callers MUST decode before use (e.g. `echo \"$body\" | base64 -d > body.md`, then pass via `body_path: body.md` to softprops/action-gh-release). Base64 is used so the body survives GitHub Actions' job-output character restrictions."
         value: ${{ jobs.release.outputs.release_body }}
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   release:
@@ -240,6 +241,7 @@ jobs:
           PREV_TAG: ${{ steps.version.outputs.prev_tag }}
           CHANGELOG_REF: ${{ steps.version.outputs.changelog_ref }}
           BUMP_TYPE: ${{ steps.version.outputs.bump_type }}
+          RELEASE_BRANCH: ${{ inputs.release_branch }}
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -261,11 +263,19 @@ jobs:
           # PR list scoped to the diff window. Strict > to avoid double-including
           # the boundary PR from the previous release.
           PREV_DATE=$(TZ=UTC git log -1 --date=iso-strict-local --format="%cd" "${CHANGELOG_REF}")
-          gh pr list --state merged --base "${{ inputs.release_branch }}" \
-            --search "merged:>${PREV_DATE}" \
-            --json number,title,author \
-            --jq '.[] | "- #\(.number) \(.title) (@\(.author.login))"' \
-            > /tmp/prs.txt 2>/dev/null || echo "No PRs found" > /tmp/prs.txt
+          if gh pr list --state merged --base "$RELEASE_BRANCH" \
+              --search "merged:>${PREV_DATE}" \
+              --json number,title,author \
+              --jq '.[] | "- #\(.number) \(.title) (@\(.author.login))"' \
+              > /tmp/prs.txt; then
+            if [ ! -s /tmp/prs.txt ]; then
+              echo "(no PRs merged in this range)" > /tmp/prs.txt
+            fi
+          else
+            # Don't fail the whole release on a PR-list hiccup, but surface it.
+            echo "::warning::gh pr list failed; release notes will lack PR context"
+            echo "(PR list unavailable — gh pr list failed; check pull-requests: read permission)" > /tmp/prs.txt
+          fi
 
           # Diff — restricted to files touched by merge commits, null-delimited for
           # safe handling of filenames with spaces.
@@ -404,29 +414,66 @@ jobs:
         id: body
         env:
           TAG: ${{ steps.version.outputs.tag }}
+          CHANGELOG_REF: ${{ steps.version.outputs.changelog_ref }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           COMPARE_URL=$(cat /tmp/compare_url.txt)
+          NOTES_SOURCE="placeholder"
 
+          # Preferred: AI-generated notes (from earlier step).
           if [ -f /tmp/release_notes.txt ] && [ -s /tmp/release_notes.txt ]; then
+            NOTES_SOURCE="ai"
             # Strip leading H1 — GitHub Release UI adds the title separately.
             sed '1{/^#[[:space:]]/d}' /tmp/release_notes.txt > /tmp/release_body.md
+            {
+              echo ""
+              echo "## Commits"
+              echo ""
+              cat /tmp/commits.txt
+              echo ""
+              echo "**Full Changelog**: ${COMPARE_URL}"
+            } >> /tmp/release_body.md
+
+          # Fallback: GitHub's native release-notes endpoint. Returns "## What's
+          # Changed" with PR list + contributors + full-changelog link, which is
+          # the canonical GH release-notes format and already includes the
+          # compare URL — don't append our own commits/compare to it.
+          elif gh api "repos/${REPO}/releases/generate-notes" \
+                 -X POST \
+                 -f tag_name="$TAG" \
+                 -f previous_tag_name="$CHANGELOG_REF" \
+                 --jq '.body' > /tmp/native_notes.txt 2>/tmp/native_err.txt \
+               && [ -s /tmp/native_notes.txt ]; then
+            NOTES_SOURCE="native"
+            echo "Using GitHub native release notes (no Anthropic API key or AI step failed)"
+            cp /tmp/native_notes.txt /tmp/release_body.md
+
+          # Final fallback: minimal body with commit list + compare URL.
           else
-            echo "## Release ${TAG}" > /tmp/release_body.md
-            echo "" >> /tmp/release_body.md
+            NOTES_SOURCE="placeholder"
+            if [ -s /tmp/native_err.txt ]; then
+              echo "::warning::native generate-notes also failed:"
+              sed 's/^/  /' /tmp/native_err.txt
+            fi
+            {
+              echo "## Release ${TAG}"
+              echo ""
+              echo "## Commits"
+              echo ""
+              cat /tmp/commits.txt
+              echo ""
+              echo "**Full Changelog**: ${COMPARE_URL}"
+            } > /tmp/release_body.md
           fi
 
-          {
-            echo ""
-            echo "## Commits"
-            echo ""
-            cat /tmp/commits.txt
-            echo ""
-            echo "**Full Changelog**: ${COMPARE_URL}"
-          } >> /tmp/release_body.md
-
+          echo "Release body assembled from: ${NOTES_SOURCE}"
           ENCODED=$(base64 -w 0 /tmp/release_body.md)
-          echo "release_body=${ENCODED}" >> "$GITHUB_OUTPUT"
+          {
+            echo "release_body=${ENCODED}"
+            echo "notes_source=${NOTES_SOURCE}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         if: inputs.dry_run != true && inputs.create_release == true
