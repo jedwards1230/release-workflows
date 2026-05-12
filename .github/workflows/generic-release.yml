@@ -151,7 +151,9 @@ jobs:
                   files: ${{ inputs.artifacts_pattern }}
                   draft: ${{ inputs.draft }}
                   prerelease: ${{ inputs.prerelease }}
-                  generate_release_notes: true
+                  # Don't enable generate_release_notes here — body_path already supplies
+                  # the caller's changelog content. Setting both produces two "What's Changed"
+                  # sections in the release body (visible in v0.1.0 and v0.1.1).
               env:
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
