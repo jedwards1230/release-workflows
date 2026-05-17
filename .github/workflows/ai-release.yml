@@ -1,9 +1,9 @@
 # Reusable workflow: compute the next version, optionally bump a Helm chart
-# version into the tagged commit, then assemble release notes (AI-generated
-# when ANTHROPIC_API_KEY is provided; native generate_release_notes
-# fallback otherwise). Outputs the tag, version, prev_tag, bump_type, and a
-# base64-encoded release body so the caller can chain build/publish jobs
-# before creating the GitHub Release.
+# and/or package.json version into the tagged commit, then assemble release
+# notes (AI-generated when ANTHROPIC_API_KEY is provided; native
+# generate_release_notes fallback otherwise). Outputs the tag, version,
+# prev_tag, bump_type, and a base64-encoded release body so the caller can
+# chain build/publish jobs before creating the GitHub Release.
 #
 # Extracted from kova-land/kova's release.yml (the gold-standard reference
 # audited 2026-05-12). See jedwards1230/home-orchestration .claude/rules/
@@ -33,6 +33,11 @@ on:
         default: ""
       chart_path:
         description: "Path to a Chart.yaml whose version + appVersion should be bumped (committed into tag, not pushed to main). Empty = skip."
+        required: false
+        type: string
+        default: ""
+      package_path:
+        description: "Path to a package.json whose version should be bumped (committed into tag, not pushed to main). Empty = skip."
         required: false
         type: string
         default: ""
@@ -210,25 +215,46 @@ jobs:
           echo "Updated $CHART_FILE:"
           grep -E '^(version|appVersion):' "$CHART_FILE"
 
+      - name: Update package.json version
+        if: inputs.dry_run != true && inputs.package_path != ''
+        env:
+          NEXT_VERSION: ${{ steps.version.outputs.version }}
+          PKG_FILE: ${{ inputs.package_path }}
+        run: |
+          set -euo pipefail
+          jq --arg v "$NEXT_VERSION" '.version = $v' "$PKG_FILE" > "${PKG_FILE}.tmp"
+          mv "${PKG_FILE}.tmp" "$PKG_FILE"
+          echo "Updated $PKG_FILE version to $(jq -r '.version' "$PKG_FILE")"
+
       - name: Commit version bump and create tag
         if: inputs.dry_run != true
         env:
           NEXT_VERSION: ${{ steps.version.outputs.version }}
           NEXT_TAG: ${{ steps.version.outputs.tag }}
           CHART_FILE: ${{ inputs.chart_path }}
+          PKG_FILE: ${{ inputs.package_path }}
           SERVICE_NAME: ${{ inputs.service_name }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Bump committed into the tagged commit only — NOT pushed to main. The tag
-          # carries the bumped manifest; downstream jobs check out the tag ref. This
+          # Bumps committed into the tagged commit only — NOT pushed to main. The tag
+          # carries the bumped manifest(s); downstream jobs check out the tag ref. This
           # works with branch protection rules that reject direct pushes from CI.
+          BUMPED=""
           if [ -n "$CHART_FILE" ] && ! git diff --quiet "$CHART_FILE"; then
             git add "$CHART_FILE"
-            git commit -m "chore(${SERVICE_NAME}): bump chart version to ${NEXT_VERSION}"
-            echo "Committed chart version bump (included in tag, not pushed to main)"
+            BUMPED="${BUMPED}${CHART_FILE} "
+          fi
+          if [ -n "$PKG_FILE" ] && ! git diff --quiet "$PKG_FILE"; then
+            git add "$PKG_FILE"
+            BUMPED="${BUMPED}${PKG_FILE} "
+          fi
+
+          if [ -n "$BUMPED" ]; then
+            git commit -m "chore(${SERVICE_NAME}): bump version to ${NEXT_VERSION}"
+            echo "Committed manifest bump (${BUMPED}) — included in tag, not pushed to main"
           fi
 
           git tag -a "$NEXT_TAG" -m "Release ${NEXT_VERSION}"
