@@ -1,3 +1,7 @@
+# Legacy reusable workflow: compute the next semver tag from existing tags
+# (or a custom version) and generate a commit-list changelog. Used by this
+# repo's own release.yml self-release; new consumers should prefer
+# ai-release.yml.
 name: Calculate Version
 
 on:
@@ -48,7 +52,6 @@ jobs:
               uses: actions/checkout@v6
               with:
                   fetch-depth: 0
-                  token: ${{ secrets.GITHUB_TOKEN }}
 
             - name: Change to working directory
               if: inputs.working_directory != '.'
@@ -83,12 +86,12 @@ jobs:
                     # Parse current version (remove 'v' prefix)
                     VERSION_NUMBERS=${CURRENT_VERSION#v}
                     IFS='.' read -r MAJOR MINOR PATCH <<< "${VERSION_NUMBERS}"
-                    
+
                     # Default to 0 if parsing fails
                     MAJOR=${MAJOR:-0}
                     MINOR=${MINOR:-0}
                     PATCH=${PATCH:-0}
-                    
+
                     # Increment based on type
                     case "${VERSION_TYPE}" in
                       major)
@@ -104,7 +107,7 @@ jobs:
                         PATCH=$((PATCH + 1))
                         ;;
                     esac
-                    
+
                     NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
                   fi
 
@@ -157,7 +160,10 @@ jobs:
 
             - name: Summary
               run: |
-                  echo "📊 Version Calculation Complete:"
-                  echo "  Current: ${{ steps.current_version.outputs.current_version }}"
-                  echo "  New: ${{ steps.new_version.outputs.new_version }}"
-                  echo "  Changelog: ${{ steps.changelog.outputs.changelog_file }}"
+                  {
+                    echo "### Version Calculation"
+                    echo ""
+                    echo "- Current: \`${{ steps.current_version.outputs.current_version }}\`"
+                    echo "- New: \`${{ steps.new_version.outputs.new_version }}\`"
+                    echo "- Changelog: \`${{ steps.changelog.outputs.changelog_file }}\`"
+                  } >> "$GITHUB_STEP_SUMMARY"

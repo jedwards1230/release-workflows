@@ -19,7 +19,7 @@ For Claude Code plugin marketplace validation, see [jedwards1230/claude-plugin-a
 
 ### 1. AI Release (`ai-release.yml`) — **Preferred**
 
-Full standard release workflow: computes the next version (semver bump or explicit override), optionally bumps a Helm chart version into the tagged commit, generates AI release notes (Haiku for patch, Sonnet for minor/major, cumulative diff for non-patch), and either creates the GitHub Release directly or hands the body back to the caller to chain build/publish jobs.
+Full-featured release workflow: computes the next version (semver bump or explicit override), optionally bumps a Helm chart version into the tagged commit, generates AI release notes (Haiku for patch, Sonnet for minor/major, cumulative diff for non-patch), and either creates the GitHub Release directly or hands the body back to the caller to chain build/publish jobs.
 
 #### Inputs
 
