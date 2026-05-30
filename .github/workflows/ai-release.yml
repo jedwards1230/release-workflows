@@ -4,9 +4,6 @@
 # fallback otherwise). Outputs the tag, version, prev_tag, bump_type, and a
 # base64-encoded release body so the caller can chain build/publish jobs
 # before creating the GitHub Release.
-#
-# This is the recommended reusable release workflow — prefer it over the
-# legacy calculate-version.yml / generic-release.yml pair.
 name: AI Release
 
 on:
