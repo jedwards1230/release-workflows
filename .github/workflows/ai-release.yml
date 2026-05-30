@@ -4,17 +4,13 @@
 # fallback otherwise). Outputs the tag, version, prev_tag, bump_type, and a
 # base64-encoded release body so the caller can chain build/publish jobs
 # before creating the GitHub Release.
-#
-# Extracted from kova-land/kova's release.yml (the gold-standard reference
-# audited 2026-05-12). See jedwards1230/home-orchestration .claude/rules/
-# release-conventions.md for the standard this workflow implements.
 name: AI Release
 
 on:
   workflow_call:
     inputs:
       service_name:
-        description: "Short service identifier used in commit messages, e.g. 'kova'"
+        description: "Short service identifier used in commit messages, e.g. 'my-app'"
         required: true
         type: string
       service_description:
