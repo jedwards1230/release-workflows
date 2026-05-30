@@ -1,4 +1,11 @@
+# This repo's own release: manually dispatched. Self-releases via ai-release.yml
+# (the reusable workflow this repo publishes), then force-moves the v0 / v0.x
+# tags that consumers pin to the new immutable vX.Y.Z. ai-release.yml only
+# creates immutable tags, so this moving-tag job is what keeps `@v0` advancing.
 name: Release Workflows
+
+run-name: >-
+    Release Workflows: ${{ inputs.custom_version || inputs.version_type }}
 
 on:
     workflow_dispatch:
@@ -16,40 +23,45 @@ on:
                 description: "Custom version (optional, overrides version_type)"
                 required: false
                 type: string
-            draft:
-                description: "Create as draft release"
-                required: false
-                default: false
-                type: boolean
-            prerelease:
-                description: "Mark as prerelease"
-                required: false
-                default: false
-                type: boolean
 
 permissions:
     contents: write
 
 jobs:
-    calculate-version:
-        uses: ./.github/workflows/calculate-version.yml
-        with:
-            version_type: ${{ github.event.inputs.version_type }}
-            custom_version: ${{ github.event.inputs.custom_version }}
-            working_directory: "."
-        secrets: inherit
-
     release:
-        needs: calculate-version
-        uses: ./.github/workflows/generic-release.yml
+        uses: ./.github/workflows/ai-release.yml
         with:
-            new_version: ${{ needs.calculate-version.outputs.new_version }}
-            current_version: ${{ needs.calculate-version.outputs.current_version }}
-            changelog_content: ${{ needs.calculate-version.outputs.changelog_content }}
-            changelog_artifact_name: changelog-${{ needs.calculate-version.outputs.new_version }}
-            draft: ${{ github.event.inputs.draft == 'true' }}
-            prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+            service_name: release-workflows
+            service_description: "reusable GitHub Actions release workflows"
+            bump_type: ${{ inputs.version_type }}
+            version_override: ${{ inputs.custom_version }}
             create_release: true
-            artifacts_pattern: ""
-            working_directory: "."
-        secrets: inherit
+        secrets:
+            ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+    # Maintain the moving v0 / v0.x tags consumers pin (@v0). ai-release.yml
+    # only cuts the immutable vX.Y.Z; this points the major/minor tags at it.
+    moving-tags:
+        needs: release
+        if: needs.release.outputs.tag != ''
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v6
+              with:
+                  fetch-depth: 0
+            - name: Move major/minor tags to the new release
+              env:
+                  NEW_TAG: ${{ needs.release.outputs.tag }}
+              run: |
+                  set -euo pipefail
+                  git fetch --tags --force origin
+                  VER="${NEW_TAG#v}"
+                  IFS='.' read -r MAJOR MINOR _ <<< "${VER}"
+                  for MV in "v${MAJOR}" "v${MAJOR}.${MINOR}"; do
+                    git tag -f -a "${MV}" "${NEW_TAG}^{commit}" -m "Latest release: ${NEW_TAG}"
+                    git push -f origin "${MV}"
+                    echo "moved ${MV} -> ${NEW_TAG}" >> "$GITHUB_STEP_SUMMARY"
+                  done

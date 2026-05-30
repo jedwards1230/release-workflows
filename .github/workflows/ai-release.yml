@@ -4,10 +4,6 @@
 # fallback otherwise). Outputs the tag, version, prev_tag, bump_type, and a
 # base64-encoded release body so the caller can chain build/publish jobs
 # before creating the GitHub Release.
-#
-# Extracted from an internal repo's release.yml (the gold-standard reference
-# audited 2026-05-12). See an internal repo internal docs/
-# release conventions for the standard this workflow implements.
 name: AI Release
 
 on:
