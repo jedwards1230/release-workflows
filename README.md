@@ -19,13 +19,13 @@ For Claude Code plugin marketplace validation, see [jedwards1230/claude-plugin-a
 
 ### 1. AI Release (`ai-release.yml`) — **Preferred**
 
-Full kova-pattern release workflow: computes the next version (semver bump or explicit override), optionally bumps a Helm chart version into the tagged commit, generates AI release notes (Haiku for patch, Sonnet for minor/major, cumulative diff for non-patch), and either creates the GitHub Release directly or hands the body back to the caller to chain build/publish jobs.
+Full-featured release workflow: computes the next version (semver bump or explicit override), optionally bumps a Helm chart version into the tagged commit, generates AI release notes (Haiku for patch, Sonnet for minor/major, cumulative diff for non-patch), and either creates the GitHub Release directly or hands the body back to the caller to chain build/publish jobs.
 
 #### Inputs
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `service_name` | Short service identifier (e.g. `"kova"`) used in commit messages | Yes | - |
+| `service_name` | Short service identifier (e.g. `"my-app"`) used in commit messages | Yes | - |
 | `service_description` | One-line description used in the AI prompt | No | - |
 | `bump_type` | `patch`, `minor`, or `major` | Yes | - |
 | `version_override` | Explicit `X.Y.Z` (ignores `bump_type`) | No | - |

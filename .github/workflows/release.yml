@@ -1,3 +1,7 @@
+# This repo's own release: manually dispatched, computes the next version via
+# calculate-version.yml and tags/releases via generic-release.yml. The reusable
+# workflows other repos consume are ai-release.yml (recommended) plus the legacy
+# calculate-version.yml / generic-release.yml.
 name: Release Workflows
 
 on:
