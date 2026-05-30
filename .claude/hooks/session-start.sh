@@ -3,7 +3,7 @@
 # Fires once when a fresh Claude Code session begins (not on resume).
 #
 # In Claude Code Web (ephemeral containers), installs required tools.
-# In local devcontainers, tools are pre-installed via Dockerfile.
+# Locally, assumes shellcheck/yq are already on PATH.
 
 set +e  # Never exit on error in session-start
 
@@ -23,7 +23,7 @@ if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ]; then
       -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
   fi
 else
-  echo "[session-start] Running in local devcontainer -- tools pre-installed" >&2
+  echo "[session-start] Running locally -- assuming shellcheck/yq are installed" >&2
 fi
 
 echo "[session-start] Done" >&2
