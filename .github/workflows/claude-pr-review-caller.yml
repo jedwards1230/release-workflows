@@ -1,0 +1,30 @@
+# Self-review: this repo reviews its own PRs by calling its own published
+# reusable claude-pr-review.yml@v1 (claude-code-action@v1, Haiku, review-team +
+# public marketplace + github_ci by default).
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  review:
+    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    with:
+      focus: |
+        release-workflows hosts REUSABLE GitHub Actions workflows other repos pin.
+        - Script injection: untrusted input (PR titles, branch names, event data)
+          interpolated as ${{ }} directly into run: blocks — must go via env vars.
+        - Least-privilege permissions; never grant more than a job needs.
+        - Secret hygiene: no echoing/logging secrets, no secrets in plan/JSON
+          output, correct required/optional secret contracts on reusable inputs.
+        - Pinned action versions; moving-tag / release correctness.
+        Do NOT re-flag yaml formatting — CI owns that.
