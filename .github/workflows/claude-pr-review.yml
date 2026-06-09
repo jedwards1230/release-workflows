@@ -124,6 +124,10 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           track_progress: true
+          # Surface the full agent transcript (incl. Task tool calls to
+          # review-team sub-agents) in the job log, so review-team usage is
+          # observable/auditable instead of inferred from the PR comment.
+          show_full_output: true
           plugin_marketplaces: ${{ steps.compose.outputs.marketplaces }}
           plugins: ${{ steps.compose.outputs.plugins }}
           claude_args: |
