@@ -58,6 +58,8 @@ jobs:
                   NEW_TAG: ${{ needs.release.outputs.tag }}
               run: |
                   set -euo pipefail
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
                   git fetch --tags --force origin
                   VER="${NEW_TAG#v}"
                   IFS='.' read -r MAJOR MINOR _ <<< "${VER}"
