@@ -11,6 +11,11 @@
 # what it needs.
 #
 # Usage (caller):
+#   permissions:
+#     contents: read
+#     actions: read
+#     pull-requests: write
+#     id-token: write
 #   jobs:
 #     review:
 #       uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
@@ -68,6 +73,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read # lets the github_ci MCP server install (CI status checks)
   pull-requests: write
   id-token: write # Required by claude-code-action for OIDC GitHub token exchange
 
