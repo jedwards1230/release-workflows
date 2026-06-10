@@ -140,11 +140,31 @@ jobs:
 
             Review this pull request. The PR branch is already checked out.
 
-            The review-team plugin is enabled. For any dimension that warrants a
-            deeper look you MAY delegate to its specialist agents via the Task
-            tool (e.g. security-analyst, software-engineer, qa-technician,
-            data-engineer, frontend-designer) — but keep the review proportional
-            to the size of the change; a small diff does not need the full team.
+            The review-team plugin is enabled and its specialist agents are
+            the point of this review — actually use them. Work through the change
+            dimension by dimension, and for each dimension the diff genuinely
+            touches, launch the review-team specialist agent that best fits it
+            via the Task tool. You may launch several, one Task call each; prefer
+            delegating to the right specialist over reviewing everything yourself
+            inline. They run on the same fast model, so delegation is cheap — the
+            cost to avoid is spending it on a trivial diff, not running several
+            agents. Choose agents by matching what the diff touches to the
+            review-team agents currently available to you (read their
+            descriptions); do not assume a fixed roster.
+
+            Skip delegation only when the change is trivial: under ~20 changed
+            lines of low-risk code, pure docs/comment/config-value edits, or a
+            dependency bump with no logic change. If the change is sensitive
+            (security, data integrity, auth), still delegate even when small.
+
+            When you delegate, hand the agent enough to work on its own: the repo
+            name, the relevant file paths or diff hunk, and the specific concern.
+            Then fold its findings into your own verdict — you own the final
+            review.
+
+            The ### Focus section below may add repo-specific guidance or name
+            particular agents to prioritize; treat it as an extension of these
+            instructions.
 
             Do NOT re-flag formatting/style that linters and formatters already
             own. You cannot build or run the code, so do not claim test, race, or
