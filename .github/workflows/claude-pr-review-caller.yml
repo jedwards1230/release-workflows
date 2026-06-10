@@ -22,7 +22,8 @@ jobs:
       focus: |
         release-workflows hosts REUSABLE GitHub Actions workflows other repos pin.
         - Script injection: untrusted input (PR titles, branch names, event data)
-          interpolated as ${{ }} directly into run: blocks — must go via env vars.
+          interpolated as GitHub Actions expressions directly into run: blocks —
+          must go via env vars.
         - Least-privilege permissions; never grant more than a job needs.
         - Secret hygiene: no echoing/logging secrets, no secrets in plan/JSON
           output, correct required/optional secret contracts on reusable inputs.
