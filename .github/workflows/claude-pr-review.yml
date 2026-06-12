@@ -10,6 +10,12 @@
 # the base review prompt. So a caller gets review-team for free and only adds
 # what it needs.
 #
+# The workflow also frontloads review context into the prompt: the changed-file
+# list (`git diff --name-status`), the (noise-filtered, size-capped) PR diff, and
+# any inline/summary comments this bot left on earlier rounds of the same PR. The
+# agent reviews from what it's given instead of rediscovering the diff via
+# Glob/Grep/Read, and a re-review knows what it already raised.
+#
 # Usage (caller):
 #   permissions:
 #     contents: read
@@ -128,6 +134,57 @@ jobs:
           if [ -n "$EXTRA_TOOLS" ]; then BASE_TOOLS="${BASE_TOOLS},${EXTRA_TOOLS}"; fi
           echo "allowed_tools=${BASE_TOOLS}" >> "$GITHUB_OUTPUT"
 
+      - name: Compose review context (diff + prior-round comments)
+        id: ctx
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+
+          # Append a possibly-multiline value to GITHUB_OUTPUT under a heredoc key.
+          emit() {
+            { printf '%s<<CTX_EOF\n' "$1"; cat; printf '\nCTX_EOF\n'; } >> "$GITHUB_OUTPUT"
+          }
+
+          # 1. Changed-file list (cheap; always include). Three-dot = PR changes
+          #    vs the merge-base, so a moved base branch doesn't pollute it.
+          NAMESTATUS=$(git diff --name-status "$BASE_SHA"...HEAD 2>/dev/null || true)
+          [ -z "$NAMESTATUS" ] && NAMESTATUS=$(gh pr diff "$PR_NUMBER" --name-only 2>/dev/null || true)
+          [ -z "$NAMESTATUS" ] && NAMESTATUS="(changed-file list unavailable)"
+          printf '%s' "$NAMESTATUS" | emit namestatus
+
+          # 2. PR diff — drop generated/asset/lock noise, then cap to a byte
+          #    budget so a huge PR can't blow the context (agent Reads the rest).
+          MAX_BYTES=50000
+          DIFF=$(git diff "$BASE_SHA"...HEAD -- . \
+            ':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.sum' \
+            ':(exclude)*.svg' ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.webp' \
+            ':(exclude)**/dist/**' ':(exclude)**/vendor/**' ':(exclude)**/node_modules/**' \
+            2>/dev/null || true)
+          [ -z "$DIFF" ] && DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null || true)
+          if [ "${#DIFF}" -gt "$MAX_BYTES" ]; then
+            DIFF=$(printf '%s' "$DIFF" | head -c "$MAX_BYTES")
+            DIFF="${DIFF}"$'\n'"... [diff truncated at ${MAX_BYTES} bytes — Read the remaining changed files for the rest] ..."
+          fi
+          [ -z "$DIFF" ] && DIFF="(diff unavailable — fall back to: gh pr diff $PR_NUMBER)"
+          printf '%s' "$DIFF" | emit diff
+
+          # 3. Prior-round comments from THIS bot, so a re-review knows what it
+          #    already raised. First review of a PR → "(none)".
+          INLINE=$(gh api "repos/$REPO/pulls/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.type=="Bot") | "- \(.path):\(.line // .original_line // "?") — \(.body | gsub("\r?\n";" ") | .[0:140]) (\(.html_url))"' \
+            2>/dev/null | head -40 || true)
+          SUMMARY=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.type=="Bot") | "- summary: \(.body | gsub("\r?\n";" ") | .[0:160]) (\(.html_url))"' \
+            2>/dev/null | head -10 || true)
+          # Keep only well-formed list lines so a non-200 API body can't leak in.
+          PRIOR=$(printf '%s\n%s\n' "$INLINE" "$SUMMARY" | grep '^- ' || true)
+          [ -z "$PRIOR" ] && PRIOR="(none — this is the first review of this PR)"
+          printf '%s' "$PRIOR" | emit prior
+
       - name: Run Claude PR review
         id: claude
         uses: anthropics/claude-code-action@v1
@@ -153,6 +210,27 @@ jobs:
             PR NUMBER: ${{ github.event.pull_request.number }}
 
             Review this pull request. The PR branch is already checked out.
+
+            ### Changed files
+
+            ${{ steps.ctx.outputs.namestatus }}
+
+            ### Diff
+
+            ${{ steps.ctx.outputs.diff }}
+
+            The changed-file list and diff above are authoritative — review from
+            them. Do NOT re-derive them with `gh pr diff` or `git diff`. Use Read
+            only to see code surrounding a hunk, and read any given file at most
+            once. If the diff was marked truncated, Read the omitted files.
+
+            ### Earlier review rounds (this bot, same PR)
+
+            ${{ steps.ctx.outputs.prior }}
+
+            If that section lists findings, this is a re-review after a follow-up
+            commit: check whether each was addressed by the new changes, do NOT
+            re-post duplicates, and concentrate on what the latest commits changed.
 
             The review-team plugin is enabled and its specialist agents are
             the point of this review — actually use them. Work through the change
