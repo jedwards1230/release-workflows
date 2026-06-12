@@ -144,9 +144,14 @@ jobs:
         run: |
           set -uo pipefail
 
+          # Random per-run heredoc delimiter so no injected content can contain a
+          # line that prematurely terminates the GITHUB_OUTPUT block (defense in
+          # depth — every emitted line is already prefixed, but don't rely on it).
+          DELIM="CTX_EOF_$(uuidgen 2>/dev/null || echo "${RANDOM}${RANDOM}${RANDOM}")"
+
           # Append a possibly-multiline value to GITHUB_OUTPUT under a heredoc key.
           emit() {
-            { printf '%s<<CTX_EOF\n' "$1"; cat; printf '\nCTX_EOF\n'; } >> "$GITHUB_OUTPUT"
+            { printf '%s<<%s\n' "$1" "$DELIM"; cat; printf '\n%s\n' "$DELIM"; } >> "$GITHUB_OUTPUT"
           }
 
           # 1. Changed-file list (cheap; always include). Three-dot = PR changes
