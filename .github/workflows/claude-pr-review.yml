@@ -62,6 +62,16 @@ on:
         required: false
         type: number
         default: 50
+      allowed_bots:
+        description: >-
+          Comma-separated bot actors whose triggering events are allowed to run
+          the review (or '*' for all). Defaults to 'github-actions' so a CI
+          auto-format/auto-fix push (which re-triggers `synchronize` as the
+          github-actions bot) still gets reviewed instead of hard-failing the
+          action with "Workflow initiated by non-human actor".
+        required: false
+        type: string
+        default: "github-actions"
     secrets:
       ANTHROPIC_API_KEY:
         description: "Anthropic API key for the review run."
@@ -124,6 +134,10 @@ jobs:
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           track_progress: true
+          # Allow CI auto-format/auto-fix bot pushes to be reviewed rather than
+          # hard-failing the run when `synchronize` fires as the github-actions
+          # bot (default 'github-actions'; caller can widen to '*' or add more).
+          allowed_bots: ${{ inputs.allowed_bots }}
           # Surface the full agent transcript (incl. Task tool calls to
           # review-team sub-agents) in the job log, so review-team usage is
           # observable/auditable instead of inferred from the PR comment.
