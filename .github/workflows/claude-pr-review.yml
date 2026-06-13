@@ -171,7 +171,10 @@ jobs:
             2>/dev/null || true)
           [ -z "$DIFF" ] && DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null || true)
           if [ "${#DIFF}" -gt "$MAX_BYTES" ]; then
-            DIFF=$(printf '%s' "$DIFF" | head -c "$MAX_BYTES")
+            # Bash native substring — NOT `printf … | head -c`, which SIGPIPEs
+            # printf once head closes the pipe and, under pipefail, fails the
+            # step on any diff over the budget.
+            DIFF="${DIFF:0:$MAX_BYTES}"
             DIFF="${DIFF}"$'\n'"... [diff truncated at ${MAX_BYTES} bytes — Read the remaining changed files for the rest] ..."
           fi
           [ -z "$DIFF" ] && DIFF="(diff unavailable — fall back to: gh pr diff $PR_NUMBER)"
