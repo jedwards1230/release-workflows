@@ -78,6 +78,19 @@ on:
         required: false
         type: string
         default: "github-actions"
+      draft_on_blocking:
+        description: >-
+          When true, if the review posts one or more BLOCKING inline comments the
+          agent converts the PR to a draft (`gh pr ready --undo`). Draft PRs are
+          skipped by this workflow's `if: !draft` gate, so follow-up pushes don't
+          auto-review until the author resolves the threads and marks the PR ready
+          for review again (which fires `ready_for_review` → a fresh full review).
+          This batches re-reviews on churn-heavy PRs into author-controlled cycles
+          instead of one review per push. OFF by default — opt in per repo (e.g.
+          private repos); leave off where bot-initiated drafting is unwanted.
+        required: false
+        type: boolean
+        default: false
     secrets:
       ANTHROPIC_API_KEY:
         description: "Anthropic API key for the review run."
@@ -109,6 +122,8 @@ jobs:
           EXTRA_PLUGINS: ${{ inputs.extra_plugins }}
           EXTRA_MARKETPLACES: ${{ inputs.extra_plugin_marketplaces }}
           EXTRA_TOOLS: ${{ inputs.extra_allowed_tools }}
+          DRAFT_ON_BLOCKING: ${{ inputs.draft_on_blocking }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
 
@@ -131,8 +146,44 @@ jobs:
           # Allowed tools: default read-only review set (+ Task so review-team
           # specialist agents can be consulted), then any caller extras.
           BASE_TOOLS="mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git fetch:*),Bash(git show:*),Read,Glob,Grep,Task"
+          # Only grant the draft-flip command when the feature is on, so a repo
+          # that leaves it off never exposes a state-changing gh command.
+          if [ "$DRAFT_ON_BLOCKING" = "true" ]; then BASE_TOOLS="${BASE_TOOLS},Bash(gh pr ready:*)"; fi
           if [ -n "$EXTRA_TOOLS" ]; then BASE_TOOLS="${BASE_TOOLS},${EXTRA_TOOLS}"; fi
           echo "allowed_tools=${BASE_TOOLS}" >> "$GITHUB_OUTPUT"
+
+          # Draft-on-blocking instruction block — emitted into the prompt only
+          # when the feature is on (empty otherwise, so the prompt is unchanged
+          # for repos that leave it off). Built with echo/printf lines, NOT a
+          # bash heredoc: a heredoc body and terminator must sit at column 0,
+          # which would terminate this YAML `run: |` block scalar.
+          {
+            echo "draft_prompt<<EOF"
+            if [ "$DRAFT_ON_BLOCKING" = "true" ]; then
+              echo '### Blocking issues → convert this PR to draft'
+              echo ''
+              echo 'This repo has draft-on-blocking enabled. AFTER you have posted all inline'
+              echo 'comments and your summary, decide whether this review found any BLOCKING issue.'
+              echo ''
+              echo 'BLOCKING means an issue that should stop the merge: a correctness bug, a'
+              echo 'security or data-integrity flaw, a broken build/interface, or a clearly wrong'
+              echo 'behavior. It does NOT mean nits, style, naming, optional refactors, or'
+              echo '"consider" suggestions. A blocking issue is one you raised as an inline comment.'
+              echo ''
+              echo '- If you posted ONE OR MORE blocking inline comments: convert this PR to a draft'
+              printf '  by running `gh pr ready %s --undo`. Then, in your summary body,\n' "$PR_NUMBER"
+              echo '  state plainly that you set the PR to draft to pause automatic re-reviews, and'
+              echo '  that the author should address the blocking inline comments, resolve those'
+              echo '  threads, and mark the PR "Ready for review" to request a fresh review.'
+              echo '- If you found NO blocking issues (clean, or only nits/suggestions): do NOT'
+              echo '  convert to draft. Leave the PR as-is.'
+              echo ''
+              echo 'Convert to draft at most once, as your final action, and only when the bar'
+              echo 'above is genuinely met — drafting is a strong signal, so do not use it for'
+              echo 'minor or discretionary feedback.'
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Compose review context (diff + prior-round comments)
         id: ctx
@@ -300,6 +351,8 @@ jobs:
             Only flag real, actionable problems — no nitpicking, no praise. If the
             change looks good, say so in one line and skip inline comments. Keep
             total comment volume low: signal over noise.
+
+            ${{ steps.compose.outputs.draft_prompt }}
 
       - name: Write job summary
         if: always()
