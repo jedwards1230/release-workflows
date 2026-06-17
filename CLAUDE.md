@@ -185,4 +185,11 @@ release gate).
   `X.0.0` baseline so AI notes summarize the full release arc.
 - Diff sent to the AI is scoped to files touched by merge commits; direct
   pushes to `main` are excluded.
-- Model selection: Haiku for patch (fast/cheap), Sonnet for minor/major.
+- Model selection: Haiku for patch (fast/cheap), Sonnet for minor/major. Both
+  use **floating aliases** (`claude-haiku-4-5`, `claude-sonnet-4-6`) to match the
+  PR-review default and avoid pinning a snapshot that goes stale. Trade-off:
+  model *capability* can shift over time, so re-running a release on a later date
+  may word the notes differently. Notes were never byte-reproducible anyway (the
+  diff/commits differ per run, no `temperature: 0`); a consumer that needs a
+  frozen toolchain should pin an immutable `@vX.Y.Z` of this workflow rather than
+  `@v1`.
