@@ -130,6 +130,7 @@ the prompt so the agent reviews from context instead of re-querying.
 | `model` | `claude-haiku-4-5` | Model override |
 | `max_turns` | `50` | Max agent turns |
 | `allowed_bots` | `github-actions` | Bot actors allowed to trigger review |
+| `draft_on_blocking` | `false` | When on, a review that posts blocking inline comments flips the PR to draft (`gh pr ready --undo`), pausing auto-reviews until the author resolves threads and marks it ready. Batches re-reviews on churn-heavy PRs into author-controlled cycles. Opt in per repo (e.g. private repos). |
 
 **Minimal caller:**
 
