@@ -110,6 +110,13 @@ are **additive** (they append to the defaults, not replace them).
 Frontloads the PR diff, changed-file list, and prior-round bot comments into
 the prompt so the agent reviews from context instead of re-querying.
 
+The verdict is delivered by `track_progress`'s live comment. As a safety net, a
+final `Ensure review verdict reached the PR` step posts the agent's result text
+as a comment **only if** it isn't already on the PR — recovering the case (seen
+on clean-pass re-reviews) where the progress comment is left as a placeholder
+and a passing review would otherwise leave no visible output. It's idempotent
+(no double-post when the progress comment worked) and never fails the job.
+
 **Required permissions on the caller:** `contents: read`, `actions: read`,
 `pull-requests: write`, `id-token: write`
 
