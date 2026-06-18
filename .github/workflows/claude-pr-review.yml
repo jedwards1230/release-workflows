@@ -354,6 +354,66 @@ jobs:
 
             ${{ steps.compose.outputs.draft_prompt }}
 
+      - name: Ensure review verdict reached the PR
+        if: always()
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Safety net for a track_progress gap: claude-code-action posts the
+          # agent's final message to the PR via its live "progress" comment, but
+          # on some runs (observed on clean-pass re-reviews) that comment is left
+          # as the placeholder and the verdict never reaches the PR — so a passing
+          # review looks identical to "nothing happened". Recover it here: if the
+          # agent produced a successful result and it isn't already on the PR,
+          # post it as a comment. Idempotent (won't double-post when the progress
+          # comment worked) and never fails the job.
+          set +e
+          EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
+          [ -f "$EXEC_FILE" ] || { echo "no execution output; nothing to recover"; exit 0; }
+
+          IS_ERROR=$(jq -r 'last | .is_error // false' "$EXEC_FILE" 2>/dev/null)
+          RESULT=$(jq -r 'last | .result // empty' "$EXEC_FILE" 2>/dev/null)
+          if [ "$IS_ERROR" = "true" ] || [ -z "$RESULT" ]; then
+            echo "no successful result text to post (is_error=$IS_ERROR); skipping"
+            exit 0
+          fi
+
+          # Drop a leading track_progress spinner <img …> so the probe below
+          # matches on real verdict prose, not boilerplate the progress comment
+          # also carries.
+          BODY=$(printf '%s' "$RESULT" | sed -E '1s/^<img[^>]*>[[:space:]]*//')
+
+          # Probe = a verbatim, whitespace-normalized slice of the verdict. If a
+          # recent bot comment already contains it, the progress comment posted
+          # the review and no fallback is needed. Prefer an interior slice (past
+          # any shared header); fall back to the head for short verdicts.
+          NORM_BODY=$(printf '%s' "$BODY" | tr '\n' ' ' | tr -s ' ')
+          PROBE=${NORM_BODY:200:120}
+          [ -z "$PROBE" ] && PROBE=${NORM_BODY:0:120}
+
+          FOUND=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq '.[] | select(.user.type=="Bot") | .body' 2>/dev/null \
+            | tr '\n' ' ' | tr -s ' ' | grep -F -- "$PROBE")
+          if [ -n "$FOUND" ]; then
+            echo "verdict already present in a bot comment; no fallback needed"
+            exit 0
+          fi
+
+          echo "verdict missing from PR comments; posting fallback summary"
+          {
+            printf '%s\n\n' "$BODY"
+            printf -- '---\n'
+            printf '%s\n' "_Posted by the review workflow — the live progress comment did not capture the final verdict._"
+          } > "${RUNNER_TEMP}/verdict.md"
+          if gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "${RUNNER_TEMP}/verdict.md"; then
+            echo "fallback summary posted"
+          else
+            echo "WARN: failed to post fallback summary"
+          fi
+          exit 0
+
       - name: Write job summary
         if: always()
         env:
