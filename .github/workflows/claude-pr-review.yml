@@ -31,7 +31,7 @@
 #         focus: |
 #           - Path traversal in the /raw and .md handlers.
 #           - html/template vs text/template misuse (XSS).
-name: Claude PR Review
+name: PR Review
 
 run-name: "Review PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
 
@@ -421,7 +421,7 @@ jobs:
         run: |
           EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
           {
-            echo "## Claude PR Review"
+            echo "## PR Review"
             echo ""
             echo "**PR:** #${{ github.event.pull_request.number }} — ${PR_TITLE}"
             echo "**Plugins:** review-team@jedwards1230-plugins${{ inputs.extra_plugins && ' (+ extras)' || '' }}"
