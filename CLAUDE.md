@@ -131,6 +131,13 @@ edits the workflow or whose branch predates a workflow change on `main`) — it
 does **not** fail, but emits a `::warning::` + summary note so the no-review is
 visible (rebase the PR onto the default branch to get a review).
 
+**Skipped by default.** The `review` job's `if:` skips **draft** PRs and
+**Dependabot** PRs (`github.actor == 'dependabot[bot]'`) — dependency bumps are
+low-signal for AI review. A job-level skip reports the check as `skipped`, which
+GitHub counts as passing, so it never blocks merge. Other bot actors are
+governed by `allowed_bots` (default `github-actions`), passed into
+claude-code-action.
+
 **Required permissions on the caller:** `contents: read`, `actions: read`,
 `pull-requests: write`, `id-token: write`
 
