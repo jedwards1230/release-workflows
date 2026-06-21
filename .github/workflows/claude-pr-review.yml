@@ -108,7 +108,11 @@ permissions:
 
 jobs:
   review:
-    if: ${{ !github.event.pull_request.draft }}
+    # Skip review on draft PRs and on Dependabot PRs by default — dependency
+    # bumps are low-signal for AI review, and the skipped check counts as passing
+    # so it never blocks merge. (Other bot actors are governed by `allowed_bots`,
+    # which is passed into claude-code-action below.)
+    if: ${{ !github.event.pull_request.draft && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
