@@ -9,7 +9,8 @@ Published by `jedwards1230` and consumed by repos that pin `@v1`.
 .github/workflows/
 ├── ai-release.yml           # Primary reusable: version + tag + AI release notes
 ├── claude-pr-review.yml     # Reusable: AI PR review via claude-code-action@v1
-├── claude-pr-review-caller.yml  # This repo's own PR review (calls claude-pr-review.yml@v1)
+├── claude-pr-review-cancel.yml  # Reusable: cancel an in-flight review when its PR merges/closes
+├── claude-pr-review-caller.yml  # This repo's own PR review (calls claude-pr-review.yml@v1 + cancel)
 └── release.yml              # This repo's own release (calls ai-release.yml, moves @v0 tag)
 ```
 
@@ -158,6 +159,56 @@ jobs:
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
+
+---
+
+### `claude-pr-review-cancel.yml` — Claude PR Review Cancel
+
+Cancels an in-flight `claude-pr-review.yml` run when its PR is **merged or
+closed**. Needed because the review workflow only triggers on
+opened/synchronize/ready_for_review/reopened, and its `concurrency:
+cancel-in-progress` only supersedes a run on a re-push — a **merge** fires
+`pull_request: closed`, which nothing listens to, so an in-flight review would
+otherwise run to completion, burn tokens, and post comments onto an
+already-merged PR. (GitHub does not auto-cancel runs on merge.)
+
+A reusable workflow cannot self-trigger on `closed` (it only runs via
+`workflow_call`), so the `closed` trigger lives in the **caller**; this reusable
+holds the cancel logic. It finds in-progress/queued runs of the review workflow
+for the PR's head branch and cancels them (excluding its own run).
+
+**Required permissions on the calling job:** `actions: write`
+
+**Optional inputs:**
+
+| Input | Default | Notes |
+|---|---|---|
+| `review_workflow` | `Claude PR Review` | Display name of the review workflow whose runs to cancel — override if your caller workflow is named differently. |
+
+**Caller wiring** — add `closed` to the review caller's triggers and a guarded job:
+
+```yaml
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened, closed]
+
+jobs:
+  review:
+    if: github.event.action != 'closed'
+    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  cancel-review:
+    if: github.event.action == 'closed'
+    permissions:
+      actions: write
+    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review-cancel.yml@v1
+```
+
+> The `if:` guards keep the review off `closed` events and the canceller off the
+> review events. This repo's own `claude-pr-review-caller.yml` dogfoods it via a
+> local-path call (`./.github/workflows/claude-pr-review-cancel.yml`).
 
 ---
 

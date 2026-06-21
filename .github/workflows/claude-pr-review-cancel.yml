@@ -1,0 +1,80 @@
+# Reusable: cancel an in-progress Claude PR review when its PR is merged/closed.
+#
+# Why this exists:
+#   claude-pr-review.yml only triggers (in the caller) on opened/synchronize/
+#   ready_for_review/reopened, and its `concurrency: cancel-in-progress` only
+#   supersedes a run when a NEW run for the same PR starts (i.e. a re-push). A
+#   MERGE fires `pull_request: closed`, which nothing listens to — so an in-flight
+#   review keeps running to completion, spends tokens, and posts its comments onto
+#   an already-merged PR. GitHub does not auto-cancel runs on merge.
+#
+#   A reusable workflow cannot self-trigger on `closed` (it only runs via
+#   workflow_call), so the `closed` trigger must live in the caller. This reusable
+#   holds the cancel LOGIC; the caller adds a tiny `closed`-gated job that calls it.
+#
+# Usage (caller):
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, ready_for_review, reopened, closed]
+#   jobs:
+#     # ...the normal review job(s)...
+#     cancel-review:
+#       if: github.event.action == 'closed'
+#       permissions:
+#         actions: write   # required to cancel runs
+#       uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review-cancel.yml@v1
+#       # with:
+#       #   review_workflow: Claude PR Review   # default; override if your caller is named differently
+name: Claude PR Review Cancel
+
+on:
+  workflow_call:
+    inputs:
+      review_workflow:
+        description: >-
+          Display name of the review workflow whose in-progress/queued runs should
+          be cancelled for this PR's head branch. Defaults to the conventional
+          caller name "Claude PR Review".
+        required: false
+        type: string
+        default: "Claude PR Review"
+
+permissions: {}
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel in-progress review runs for this PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # Head branch is the key gh associates pull_request runs with. Passed
+          # via env (never interpolated into the script) so a hostile branch name
+          # cannot inject shell.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          WF: ${{ inputs.review_workflow }}
+          SELF: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "Cancelling in-progress '$WF' runs on branch '$HEAD_REF' (excluding self run $SELF)…"
+          ids="$(gh run list -R "$REPO" --branch "$HEAD_REF" --limit 50 \
+            --json databaseId,workflowName,status \
+            | jq -r --arg wf "$WF" --arg self "$SELF" '
+                .[]
+                | select(.workflowName == $wf
+                         and (.status == "in_progress" or .status == "queued")
+                         and ((.databaseId | tostring) != $self))
+                | .databaseId')"
+          if [ -z "$ids" ]; then
+            echo "No in-progress review runs to cancel." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "### Cancelled review runs (PR merged/closed)" >> "$GITHUB_STEP_SUMMARY"
+          for id in $ids; do
+            echo "Cancelling run $id"
+            gh run cancel "$id" -R "$REPO" || echo "  (run $id already finished)"
+            echo "- [$id]($GITHUB_SERVER_URL/$REPO/actions/runs/$id)" >> "$GITHUB_STEP_SUMMARY"
+          done
