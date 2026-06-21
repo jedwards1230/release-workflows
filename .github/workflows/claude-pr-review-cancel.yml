@@ -24,8 +24,8 @@
 #         actions: write   # required to cancel runs
 #       uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review-cancel.yml@v1
 #       # with:
-#       #   review_workflow: Claude PR Review   # default; override if your caller is named differently
-name: Claude PR Review Cancel
+#       #   review_workflow: PR Review   # default; override if your caller is named differently
+name: PR Review Cancel
 
 on:
   workflow_call:
@@ -34,10 +34,10 @@ on:
         description: >-
           Display name of the review workflow whose in-progress/queued runs should
           be cancelled for this PR's head branch. Defaults to the conventional
-          caller name "Claude PR Review".
+          caller name "PR Review".
         required: false
         type: string
-        default: "Claude PR Review"
+        default: "PR Review"
 
 permissions: {}
 
