@@ -440,3 +440,43 @@ jobs:
               echo "| Cost | \$${COST} |"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Fail if the review did not complete
+        if: always()
+        run: |
+          # claude-code-action exits 0 even when the agent run itself errored
+          # (e.g. a 401 from a bad/rotated ANTHROPIC_API_KEY, a 429 rate limit, or
+          # a 529 Anthropic outage): the result JSON carries `is_error: true` but
+          # the step — and therefore the whole job — stays green. A broken review
+          # then looks identical to a clean pass. Convert that into a real failure
+          # so an outage surfaces as a red check instead of a silent no-op.
+          set -uo pipefail
+          EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
+
+          if [ ! -f "$EXEC_FILE" ]; then
+            # No execution output → the agent never ran. The common, EXPECTED
+            # cause is claude-code-action's own workflow-validation skip (the PR's
+            # workflow file differs from the default branch — normal on PRs that
+            # edit the workflow, or whose branch predates a workflow change on
+            # main). Don't fail on that; just make it visible.
+            echo "::warning title=Claude review skipped::No agent execution output — claude-code-action did not run (likely the workflow-validation skip on a PR whose workflow file differs from the default branch). No review was performed."
+            echo "> ⚠️ **No review performed** — claude-code-action was skipped (workflow validation). Rebase the PR onto the default branch to get a review." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          IS_ERROR=$(jq -r 'last | .is_error // false' "$EXEC_FILE" 2>/dev/null || echo "true")
+          if [ "$IS_ERROR" = "true" ]; then
+            STATUS=$(jq -r 'last | .api_error_status // "n/a"' "$EXEC_FILE" 2>/dev/null || echo "n/a")
+            SUBTYPE=$(jq -r 'last | .subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+            {
+              echo ""
+              echo "### ❌ Claude review did not complete"
+              echo ""
+              echo "The agent run returned \`is_error: true\` (api_error_status: \`$STATUS\`, subtype: \`$SUBTYPE\`) — no real review was performed."
+              echo "Common causes: **401** bad/rotated \`ANTHROPIC_API_KEY\`, **429** rate limit, **529** Anthropic overload. Failing the check so this isn't mistaken for a clean pass."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Claude review failed::Agent returned is_error=true (api_error_status=$STATUS, subtype=$SUBTYPE) — no review performed."
+            exit 1
+          fi
+
+          echo "Review completed (is_error=false)."
