@@ -118,6 +118,19 @@ on clean-pass re-reviews) where the progress comment is left as a placeholder
 and a passing review would otherwise leave no visible output. It's idempotent
 (no double-post when the progress comment worked) and never fails the job.
 
+**Failure surfacing.** `claude-code-action` exits 0 even when the agent run
+itself errored — a `401` (bad/rotated `ANTHROPIC_API_KEY`), `429` rate limit, or
+`529` Anthropic overload all come back as `is_error: true` in the result JSON
+while the step stays green, so a broken review looks identical to a clean pass. A
+final `Fail if the review did not complete` step converts that into a real
+**red check**: it reads the execution-output JSON and fails the job when
+`is_error: true` (annotating the `api_error_status`/`subtype`). When there's *no*
+execution output at all — the expected `claude-code-action` workflow-validation
+skip (the PR's workflow file differs from the default branch, e.g. a PR that
+edits the workflow or whose branch predates a workflow change on `main`) — it
+does **not** fail, but emits a `::warning::` + summary note so the no-review is
+visible (rebase the PR onto the default branch to get a review).
+
 **Required permissions on the caller:** `contents: read`, `actions: read`,
 `pull-requests: write`, `id-token: write`
 
