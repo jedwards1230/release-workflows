@@ -5,7 +5,7 @@ name: Claude PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, synchronize, ready_for_review, reopened, closed]
 
 permissions:
   contents: read
@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   review:
+    if: github.event.action != 'closed'
     uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
     secrets:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -29,3 +30,11 @@ jobs:
           output, correct required/optional secret contracts on reusable inputs.
         - Pinned action versions; moving-tag / release correctness.
         Do NOT re-flag yaml formatting — CI owns that.
+
+  # Dogfood the merge-canceller via local path (no @v1 dependency): when one of
+  # this repo's own PRs is merged/closed, cancel any in-flight review for it.
+  cancel-review:
+    if: github.event.action == 'closed'
+    permissions:
+      actions: write
+    uses: ./.github/workflows/claude-pr-review-cancel.yml
