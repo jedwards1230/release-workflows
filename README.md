@@ -125,11 +125,7 @@ This allows for flexible version pinning in consuming repositories.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test the workflows
-5. Submit a pull request
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build/test/lint commands, branch and commit conventions, PR process, and release instructions.
 
 ## License
 

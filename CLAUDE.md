@@ -1,5 +1,7 @@
 # release-workflows
 
+@CONTRIBUTING.md
+
 Reusable GitHub Actions workflows for automated release management.
 Published by `jedwards1230` and consumed by repos that pin `@v1`.
 
@@ -245,13 +247,6 @@ The moving tags are updated by `release.yml`'s `moving-tags` job after each
 release via force-push. `ai-release.yml` itself only creates immutable tags.
 
 Current stable: `@v1` (v1.x.x line). `@v0` is frozen.
-
-## Releasing this repo
-
-Manual dispatch only (`workflow_dispatch` on `release.yml`). Choose `version_type`
-or supply `custom_version`. The workflow calls `ai-release.yml` then moves the
-`v0` / `v0.x` moving tags. No `semver:*` label needed (this repo is its own
-release gate).
 
 ## Conventions
 
