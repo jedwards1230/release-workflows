@@ -346,9 +346,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Skip AI call when there's nothing to summarize
-          if [ ! -s /tmp/commits.txt ] || [ "$(wc -l < /tmp/commits.txt | tr -d ' ')" -le 1 ]; then
-            echo "No commits in diff range — skipping AI release notes"
+          # Skip the AI call only when there are ZERO merge commits to summarize.
+          # Count real commit lines ("- <subj> (<hash>)") rather than wc -l: the
+          # build appends a trailing blank line (above), so an empty file and a
+          # single-commit file both have wc -l == 1 — the old `-le 1` guard wrongly
+          # skipped legitimate single-PR releases (they silently got native notes).
+          # grep -c prints the count but exits 1 on zero matches, so capture via
+          # `|| true` (a bare `|| echo 0` would append a second "0" → multiline).
+          COMMIT_COUNT=$(grep -c '^- ' /tmp/commits.txt 2>/dev/null || true)
+          if [ "${COMMIT_COUNT:-0}" -eq 0 ]; then
+            echo "No merge commits in diff range — skipping AI release notes"
             exit 0
           fi
 
