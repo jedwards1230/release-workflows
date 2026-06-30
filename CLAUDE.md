@@ -257,7 +257,9 @@ Current stable: `@v1` (v1.x.x line). `@v0` is frozen.
 - Minor/major releases use a **cumulative diff** from the previous `X.Y.0` /
   `X.0.0` baseline so AI notes summarize the full release arc.
 - Diff sent to the AI is scoped to files touched by merge commits; direct
-  pushes to `main` are excluded.
+  pushes to `main` are excluded. On squash-merge repos (no merge commits in the
+  range) it falls back to first-parent non-merge commits, so squashed PRs still
+  get AI notes — the AI step only truly skips when the range is genuinely empty.
 - Model selection: Haiku for patch (fast/cheap), Sonnet for minor/major. Both
   use **floating aliases** (`claude-haiku-4-5`, `claude-sonnet-4-6`) to match the
   PR-review default and avoid pinning a snapshot that goes stale. Trade-off:
