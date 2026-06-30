@@ -257,8 +257,25 @@ jobs:
           echo "Bump type: $BUMP_TYPE"
           echo "Changelog range: ${CHANGELOG_REF}..${DIFF_TARGET}"
 
-          # Merge commits only — excludes direct-to-main pushes from release notes
-          git log --merges --pretty=format:"- %s (%h)" "${CHANGELOG_REF}..${DIFF_TARGET}" > /tmp/commits.txt
+          # Pick the commit-selection strategy once, then reuse it for both the
+          # commit list (here) and the changed-files list below.
+          #
+          # Default: merge commits only — on a merge-commit repo this excludes
+          # direct-to-main pushes from the release notes (the original intent).
+          #
+          # Squash-merge repos land each PR as a single ordinary commit on the
+          # release branch, so `git log --merges` finds nothing. When the merge-commit
+          # list is empty, fall back to first-parent non-merge commits over the same
+          # range: --first-parent walks only the release branch's mainline, so the
+          # squashed PR commits are captured while side-branch noise stays excluded.
+          COMMIT_FLAGS="--merges"
+          if [ -z "$(git log --merges --pretty=format:'%h' "${CHANGELOG_REF}..${DIFF_TARGET}")" ]; then
+            COMMIT_FLAGS="--first-parent --no-merges"
+            echo "No merge commits in range — using first-parent non-merge commits (squash-merge repo)"
+          fi
+
+          # shellcheck disable=SC2086 # COMMIT_FLAGS is an intentional multi-word flag set
+          git log $COMMIT_FLAGS --pretty=format:"- %s (%h)" "${CHANGELOG_REF}..${DIFF_TARGET}" > /tmp/commits.txt
           echo "" >> /tmp/commits.txt
 
           # PR list scoped to the diff window. Strict > to avoid double-including
@@ -278,10 +295,13 @@ jobs:
             echo "(PR list unavailable — gh pr list failed; check pull-requests: read permission)" > /tmp/prs.txt
           fi
 
-          # Diff — restricted to files touched by merge commits, null-delimited for
-          # safe handling of filenames with spaces. Drop generated/asset/lock noise
-          # so it never reaches the model (mirrors claude-pr-review.yml's excludes).
-          git log --merges --name-only -z --pretty=format:"" "${CHANGELOG_REF}..${DIFF_TARGET}" \
+          # Diff — restricted to files touched by the selected commits (same
+          # COMMIT_FLAGS as the commit list above, so squash-merge repos are covered),
+          # null-delimited for safe handling of filenames with spaces. Drop
+          # generated/asset/lock noise so it never reaches the model (mirrors
+          # claude-pr-review.yml's excludes).
+          # shellcheck disable=SC2086 # COMMIT_FLAGS is an intentional multi-word flag set
+          git log $COMMIT_FLAGS --name-only -z --pretty=format:"" "${CHANGELOG_REF}..${DIFF_TARGET}" \
             | tr '\0\n' '\n\0' | grep -z '.' \
             | grep -zvE '(\.lock|-lock\.json|\.sum|\.svg|\.png|\.jpe?g|\.webp)$' \
             | grep -zvE '(^|/)(dist|vendor|node_modules)/' \
@@ -346,7 +366,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Skip the AI call only when there are ZERO merge commits to summarize.
+          # Skip the AI call only when there are ZERO commits to summarize. commits.txt
+          # is built from merge commits, or — on squash-merge repos where there are no
+          # merge commits — first-parent non-merge commits (see COMMIT_FLAGS above), so
+          # an empty file now means a genuinely empty range, not just a squash-merge repo.
           # Count real commit lines ("- <subj> (<hash>)") rather than wc -l: the
           # build appends a trailing blank line (above), so an empty file and a
           # single-commit file both have wc -l == 1 — the old `-le 1` guard wrongly
@@ -355,7 +378,7 @@ jobs:
           # `|| true` (a bare `|| echo 0` would append a second "0" → multiline).
           COMMIT_COUNT=$(grep -c '^- ' /tmp/commits.txt 2>/dev/null || true)
           if [ "${COMMIT_COUNT:-0}" -eq 0 ]; then
-            echo "No merge commits in diff range — skipping AI release notes"
+            echo "No commits in diff range (no merge or first-parent commits) — skipping AI release notes"
             exit 0
           fi
 
