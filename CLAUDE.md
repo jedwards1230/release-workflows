@@ -133,12 +133,25 @@ edits the workflow or whose branch predates a workflow change on `main`) — it
 does **not** fail, but emits a `::warning::` + summary note so the no-review is
 visible (rebase the PR onto the default branch to get a review).
 
-**Skipped by default.** The `review` job's `if:` skips **draft** PRs and
-**Dependabot** PRs (`github.actor == 'dependabot[bot]'`) — dependency bumps are
-low-signal for AI review. A job-level skip reports the check as `skipped`, which
-GitHub counts as passing, so it never blocks merge. Other bot actors are
+**Skipped by default.** The `review` job's `if:` skips **draft** PRs (opt out
+per repo with `review_drafts: true`) and **Dependabot** PRs (`github.actor ==
+'dependabot[bot]'`, not configurable) — dependency bumps and WIP iteration are
+low-signal for AI review. A job-level skip reports the check as `skipped`,
+which GitHub counts as passing, so it never blocks merge. Other bot actors are
 governed by `allowed_bots` (default `github-actions`), passed into
 claude-code-action.
+
+**Docs-only skip.** A `Detect docs-only diff` step also skips the actual
+Claude call (`skip_docs_only: true` by default) when every changed file ends
+in `.md` — a docs-only PR is low-signal for the multi-agent review-team
+treatment and this avoids repeated full-cost re-reviews on doc-only PRs (e.g.
+CONTRIBUTING/README rollouts). Set `skip_docs_only: false` to always review
+docs changes too. Unlike the draft/Dependabot skip, this still runs the cheap
+checkout + diff steps; the `Detect docs-only diff` step annotates the skip in
+the job summary, and the later `Fail if the review did not complete` step
+recognizes the same deliberate-skip condition and exits early — it does NOT
+fall through to the generic "no execution output" warning path (that path is
+reserved for the unexpected workflow-validation skip).
 
 **Required permissions on the caller:** `contents: read`, `actions: read`,
 `pull-requests: write`, `id-token: write`
@@ -161,6 +174,8 @@ claude-code-action.
 | `max_turns` | `50` | Max agent turns |
 | `allowed_bots` | `github-actions` | Bot actors allowed to trigger review |
 | `draft_on_blocking` | `false` | When on, a review that posts blocking inline comments flips the PR to draft (`gh pr ready --undo`), pausing auto-reviews until the author resolves threads and marks it ready. Batches re-reviews on churn-heavy PRs into author-controlled cycles. Opt in per repo (e.g. private repos). |
+| `review_drafts` | `false` | When true, disables the default draft-PR skip so draft PRs get reviewed too. |
+| `skip_docs_only` | `true` | When true (default), skip review when every changed file is markdown. Set false to always review docs changes. |
 
 **Minimal caller:**
 
