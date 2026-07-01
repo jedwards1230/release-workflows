@@ -172,30 +172,45 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Random per-run delimiter for every multi-line $GITHUB_OUTPUT block
+          # below — same defense as the "ctx" step: extra_plugin_marketplaces /
+          # extra_plugins / extra_allowed_tools are workflow_call inputs, and
+          # without this an input line matching a static "EOF" terminator could
+          # prematurely close the block and smuggle extra output keys (e.g.
+          # widen allowed_tools). A fresh random string per run can't be
+          # predicted by a caller's input value.
+          DELIM="COMPOSE_EOF_$(uuidgen 2>/dev/null || echo "${RANDOM}${RANDOM}${RANDOM}")"
+
           # Marketplaces: default public marketplace, then any caller extras.
           {
-            echo "marketplaces<<EOF"
+            echo "marketplaces<<$DELIM"
             echo "https://github.com/jedwards1230/claude-plugins.git"
             if [ -n "$EXTRA_MARKETPLACES" ]; then printf '%s\n' "$EXTRA_MARKETPLACES"; fi
-            echo "EOF"
+            echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
           # Plugins: default review-team, then any caller extras.
           {
-            echo "plugins<<EOF"
+            echo "plugins<<$DELIM"
             echo "review-team@jedwards1230-plugins"
             if [ -n "$EXTRA_PLUGINS" ]; then printf '%s\n' "$EXTRA_PLUGINS"; fi
-            echo "EOF"
+            echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
           # Allowed tools: default read-only review set (+ Task so review-team
-          # specialist agents can be consulted), then any caller extras.
+          # specialist agents can be consulted), then any caller extras. Also
+          # heredoc'd (not a plain key=value line) because EXTRA_TOOLS could
+          # otherwise smuggle a newline-separated fake output key.
           BASE_TOOLS="mcp__github_inline_comment__create_inline_comment,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git fetch:*),Bash(git show:*),Read,Glob,Grep,Task"
           # Only grant the draft-flip command when the feature is on, so a repo
           # that leaves it off never exposes a state-changing gh command.
           if [ "$DRAFT_ON_BLOCKING" = "true" ]; then BASE_TOOLS="${BASE_TOOLS},Bash(gh pr ready:*)"; fi
           if [ -n "$EXTRA_TOOLS" ]; then BASE_TOOLS="${BASE_TOOLS},${EXTRA_TOOLS}"; fi
-          echo "allowed_tools=${BASE_TOOLS}" >> "$GITHUB_OUTPUT"
+          {
+            echo "allowed_tools<<$DELIM"
+            printf '%s\n' "$BASE_TOOLS"
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
 
           # Draft-on-blocking instruction block — emitted into the prompt only
           # when the feature is on (empty otherwise, so the prompt is unchanged
@@ -203,7 +218,7 @@ jobs:
           # bash heredoc: a heredoc body and terminator must sit at column 0,
           # which would terminate this YAML `run: |` block scalar.
           {
-            echo "draft_prompt<<EOF"
+            echo "draft_prompt<<$DELIM"
             if [ "$DRAFT_ON_BLOCKING" = "true" ]; then
               echo '### Blocking issues → convert this PR to draft'
               echo ''
@@ -227,7 +242,7 @@ jobs:
               echo 'above is genuinely met — drafting is a strong signal, so do not use it for'
               echo 'minor or discretionary feedback.'
             fi
-            echo "EOF"
+            echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
 
       - name: Compose review context (diff + prior-round comments)
