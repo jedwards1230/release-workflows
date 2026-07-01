@@ -147,8 +147,11 @@ in `.md` — a docs-only PR is low-signal for the multi-agent review-team
 treatment and this avoids repeated full-cost re-reviews on doc-only PRs (e.g.
 CONTRIBUTING/README rollouts). Set `skip_docs_only: false` to always review
 docs changes too. Unlike the draft/Dependabot skip, this still runs the cheap
-checkout + diff steps and reports via the same "no execution output" path as
-the workflow-validation skip — it just doesn't fail the job.
+checkout + diff steps; the `Detect docs-only diff` step annotates the skip in
+the job summary, and the later `Fail if the review did not complete` step
+recognizes the same deliberate-skip condition and exits early — it does NOT
+fall through to the generic "no execution output" warning path (that path is
+reserved for the unexpected workflow-validation skip).
 
 **Required permissions on the caller:** `contents: read`, `actions: read`,
 `pull-requests: write`, `id-token: write`
