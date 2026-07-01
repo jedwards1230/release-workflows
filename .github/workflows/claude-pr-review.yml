@@ -91,6 +91,26 @@ on:
         required: false
         type: boolean
         default: false
+      review_drafts:
+        description: >-
+          When true, disables the default draft-PR skip so draft PRs get
+          reviewed too. OFF by default — draft PRs are skipped (dependency
+          bumps and WIP iteration are low-signal for AI review and this keeps
+          active feature branches from re-reviewing on every WIP push). Opt in
+          per repo if drafts should be reviewed here.
+        required: false
+        type: boolean
+        default: false
+      skip_docs_only:
+        description: >-
+          When true (default), skip review when every changed file is
+          markdown (`*.md`) — a docs-only diff is low-signal for the
+          multi-agent review-team treatment and this avoids repeated
+          full-cost re-reviews on doc-only PRs. Set false to always review
+          docs changes too.
+        required: false
+        type: boolean
+        default: true
     secrets:
       ANTHROPIC_API_KEY:
         description: "Anthropic API key for the review run."
@@ -108,17 +128,38 @@ permissions:
 
 jobs:
   review:
-    # Skip review on draft PRs and on Dependabot PRs by default — dependency
-    # bumps are low-signal for AI review, and the skipped check counts as passing
-    # so it never blocks merge. (Other bot actors are governed by `allowed_bots`,
-    # which is passed into claude-code-action below.)
-    if: ${{ !github.event.pull_request.draft && github.actor != 'dependabot[bot]' }}
+    # Skip review on draft PRs (unless review_drafts opts in) and on Dependabot
+    # PRs by default — dependency bumps are low-signal for AI review, and the
+    # skipped check counts as passing so it never blocks merge. (Other bot
+    # actors are governed by `allowed_bots`, passed into claude-code-action
+    # below.)
+    if: ${{ (inputs.review_drafts || !github.event.pull_request.draft) && github.actor != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+
+      - name: Detect docs-only diff
+        id: docsonly
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          NAMES=$(git diff --name-only "$BASE_SHA"...HEAD 2>/dev/null || true)
+          [ -z "$NAMES" ] && NAMES=$(gh pr diff "$PR_NUMBER" --name-only 2>/dev/null || true)
+          # Skip only when every changed file ends in .md (case-insensitive)
+          # and there's at least one changed file to check.
+          if [ -n "$NAMES" ] && ! printf '%s\n' "$NAMES" | grep -qvi '\.md$'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "### PR Review: skipped (docs-only diff)" >> "$GITHUB_STEP_SUMMARY"
+            echo "Every changed file is markdown — review not run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Compose plugin + tool config (defaults + additive inputs)
         id: compose
@@ -250,6 +291,7 @@ jobs:
 
       - name: Run Claude PR review
         id: claude
+        if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
         uses: anthropics/claude-code-action@v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -456,6 +498,12 @@ jobs:
           # so an outage surfaces as a red check instead of a silent no-op.
           set -uo pipefail
           EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
+
+          if [ "${{ inputs.skip_docs_only }}" = "true" ] && [ "${{ steps.docsonly.outputs.skip }}" = "true" ]; then
+            # Deliberate skip (docs-only diff) — already annotated by the
+            # "Detect docs-only diff" step. Not an error, nothing more to say.
+            exit 0
+          fi
 
           if [ ! -f "$EXEC_FILE" ]; then
             # No execution output → the agent never ran. The common, EXPECTED
