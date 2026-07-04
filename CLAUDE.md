@@ -134,12 +134,16 @@ does **not** fail, but emits a `::warning::` + summary note so the no-review is
 visible (rebase the PR onto the default branch to get a review).
 
 **Skipped by default.** The `review` job's `if:` skips **draft** PRs (opt out
-per repo with `review_drafts: true`) and **Dependabot** PRs (`github.actor ==
-'dependabot[bot]'`, not configurable) — dependency bumps and WIP iteration are
-low-signal for AI review. A job-level skip reports the check as `skipped`,
-which GitHub counts as passing, so it never blocks merge. Other bot actors are
-governed by `allowed_bots` (default `github-actions`), passed into
-claude-code-action.
+per repo with `review_drafts: true`) and **Dependabot** PRs (not configurable)
+— dependency bumps and WIP iteration are low-signal for AI review. Dependabot
+is guarded two ways: `github.actor == 'dependabot[bot]'` catches the PR
+Dependabot opens, and a `startsWith(github.event.pull_request.head.ref,
+'dependabot/')` head-branch check catches later `synchronize` events on the
+same branch whose actor is *not* dependabot (a user rebase or a github-actions
+push) — those slipped past the actor-only check and cost 2–3 paid review rounds
+per dependabot PR. A job-level skip reports the check as `skipped`, which GitHub
+counts as passing, so it never blocks merge. Other bot actors are governed by
+`allowed_bots` (default `github-actions`), passed into claude-code-action.
 
 **Docs-only skip.** A `Detect docs-only diff` step also skips the actual
 Claude call (`skip_docs_only: true` by default) when every changed file ends
@@ -173,7 +177,7 @@ reserved for the unexpected workflow-validation skip).
 | `model` | `claude-haiku-4-5` | Model override |
 | `max_turns` | `50` | Max agent turns |
 | `allowed_bots` | `github-actions` | Bot actors allowed to trigger review |
-| `draft_on_blocking` | `false` | When on, a review that posts blocking inline comments flips the PR to draft (`gh pr ready --undo`), pausing auto-reviews until the author resolves threads and marks it ready. Batches re-reviews on churn-heavy PRs into author-controlled cycles. Opt in per repo (e.g. private repos). |
+| `draft_on_blocking` | `true` | ON by default. A review that posts blocking inline comments flips the PR to draft (`gh pr ready --undo`), pausing auto-reviews until the author resolves threads and marks it ready. Batches re-reviews on churn-heavy PRs into author-controlled cycles — the main run-count/cost reducer. Opt out with `draft_on_blocking: false` where bot-initiated drafting is unwanted. |
 | `review_drafts` | `false` | When true, disables the default draft-PR skip so draft PRs get reviewed too. |
 | `skip_docs_only` | `true` | When true (default), skip review when every changed file is markdown. Set false to always review docs changes. |
 
