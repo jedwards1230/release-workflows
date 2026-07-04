@@ -4,6 +4,14 @@
 # fallback otherwise). Outputs the tag, version, prev_tag, bump_type, and a
 # base64-encoded release body so the caller can chain build/publish jobs
 # before creating the GitHub Release.
+#
+# Auth note: this workflow deliberately stays on ANTHROPIC_API_KEY (metered
+# API). Subscription OAuth tokens (CLAUDE_CODE_OAUTH_TOKEN) are rejected by
+# the x-api-key header used below; they DO work as `Authorization: Bearer`
+# (verified 2026-07), but that path is undocumented and Anthropic's policy
+# scopes subscription OAuth to its official tools (Claude Code CLI/action/
+# Agent SDK) — so the supported route to subscription billing here is
+# reworking the curl call onto `claude -p`, not the Bearer header.
 name: AI Release
 
 on:
