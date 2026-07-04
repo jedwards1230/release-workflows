@@ -45,7 +45,7 @@ or returns a base64-encoded body for the caller to chain build/publish jobs.
 
 | Secret | Required | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | no | AI notes (Haiku for patch, Sonnet for minor/major). Falls back to GitHub's native `generate-notes`, then a minimal commit-list body. |
+| `ANTHROPIC_API_KEY` | no | AI notes (Haiku for patch, Sonnet for minor/major). Falls back to GitHub's native `generate-notes`, then a minimal commit-list body. Subscription OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`) are **not** accepted here — this workflow calls the raw Messages API, which rejects them; reworking it onto the Claude CLI is the prerequisite for subscription billing. |
 
 **Outputs:**
 
@@ -121,7 +121,8 @@ and a passing review would otherwise leave no visible output. It's idempotent
 (no double-post when the progress comment worked) and never fails the job.
 
 **Failure surfacing.** `claude-code-action` exits 0 even when the agent run
-itself errored — a `401` (bad/rotated `ANTHROPIC_API_KEY`), `429` rate limit, or
+itself errored — a `401` (expired `CLAUDE_CODE_OAUTH_TOKEN` or bad/rotated
+`ANTHROPIC_API_KEY`), `429` rate limit, or
 `529` Anthropic overload all come back as `is_error: true` in the result JSON
 while the step stays green, so a broken review looks identical to a clean pass. A
 final `Fail if the review did not complete` step converts that into a real
@@ -160,11 +161,12 @@ reserved for the unexpected workflow-validation skip).
 **Required permissions on the caller:** `contents: read`, `actions: read`,
 `pull-requests: write`, `id-token: write`
 
-**Secrets:**
+**Secrets** (at least one required — checked at runtime, not startup):
 
-| Secret | Required |
-|---|---|
-| `ANTHROPIC_API_KEY` | yes |
+| Secret | Required | Notes |
+|---|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` | one of the two | **Preferred.** Claude subscription OAuth token (`claude setup-token`, Pro/Max/Team plan) — reviews bill to the subscription instead of the metered API. ~1-year lifetime, **no auto-refresh**: a 401-failed review usually means it expired (regenerate + update the secret). |
+| `ANTHROPIC_API_KEY` | one of the two | Fallback, used only when the OAuth token is absent (metered pay-per-token billing). |
 
 **Optional inputs:**
 
@@ -198,7 +200,8 @@ jobs:
   review:
     uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
     secrets:
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # fallback (metered API)
 ```
 
 ---
@@ -238,6 +241,7 @@ jobs:
     if: github.event.action != 'closed'
     uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
     secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   cancel-review:
