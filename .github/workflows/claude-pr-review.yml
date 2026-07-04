@@ -26,7 +26,8 @@
 #     review:
 #       uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
 #       secrets:
-#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
+#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}             # fallback (metered API)
 #       with:
 #         focus: |
 #           - Path traversal in the /raw and .md handlers.
@@ -113,9 +114,20 @@ on:
         type: boolean
         default: true
     secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: >-
+          Claude subscription OAuth token (generated with `claude setup-token`;
+          Pro/Max/Team plan). PREFERRED when set — the review bills to the
+          Claude subscription instead of the metered pay-per-token API.
+          ~1-year lifetime with NO auto-refresh: a 401 review failure usually
+          means it expired — regenerate and update the secret.
+        required: false
       ANTHROPIC_API_KEY:
-        description: "Anthropic API key for the review run."
-        required: true
+        description: >-
+          Anthropic API key for the review run. Fallback, used only when
+          CLAUDE_CODE_OAUTH_TOKEN is absent. At least one of the two secrets
+          must be provided (checked at runtime).
+        required: false
 
 concurrency:
   group: claude-review-${{ github.event.pull_request.number }}
@@ -141,6 +153,21 @@ jobs:
     if: ${{ (inputs.review_drafts || !github.event.pull_request.draft) && github.actor != 'dependabot[bot]' && !startsWith(github.event.pull_request.head.ref, 'dependabot/') }}
     runs-on: ubuntu-latest
     steps:
+      # Both secrets are optional on the workflow_call contract (so callers can
+      # migrate to OAuth without passing a dummy API key), which forfeits
+      # GitHub's startup-time required-secret validation — recreate it here so
+      # a caller passing neither fails loudly instead of claude-code-action
+      # dying mid-run with an opaque auth error.
+      - name: Require an Anthropic credential
+        env:
+          HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_OAUTH" != "true" ] && [ "$HAS_API_KEY" != "true" ]; then
+            echo "::error title=No Anthropic credential::Pass CLAUDE_CODE_OAUTH_TOKEN (preferred, subscription billing) and/or ANTHROPIC_API_KEY (fallback) to the reusable workflow."
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -314,7 +341,12 @@ jobs:
         if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Prefer the subscription OAuth token; fall back to the metered API
+          # key only when no OAuth token was passed. Exactly one is ever set —
+          # claude-code-action does not arbitrate between the two, so the
+          # empty-string ternary keeps the losing credential truly absent.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           track_progress: true
           # Allow CI auto-format/auto-fix bot pushes to be reviewed rather than
           # hard-failing the run when `synchronize` fires as the github-actions
@@ -545,7 +577,7 @@ jobs:
               echo "### ❌ Claude review did not complete"
               echo ""
               echo "The agent run returned \`is_error: true\` (api_error_status: \`$STATUS\`, subtype: \`$SUBTYPE\`) — no real review was performed."
-              echo "Common causes: **401** bad/rotated \`ANTHROPIC_API_KEY\`, **429** rate limit, **529** Anthropic overload. Failing the check so this isn't mistaken for a clean pass."
+              echo "Common causes: **401** expired \`CLAUDE_CODE_OAUTH_TOKEN\` (no auto-refresh — regenerate with \`claude setup-token\`) or bad/rotated \`ANTHROPIC_API_KEY\`, **429** rate limit, **529** Anthropic overload. Failing the check so this isn't mistaken for a clean pass."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error title=Claude review failed::Agent returned is_error=true (api_error_status=$STATUS, subtype=$SUBTYPE) — no review performed."
             exit 1
