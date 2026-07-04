@@ -45,7 +45,7 @@ or returns a base64-encoded body for the caller to chain build/publish jobs.
 
 | Secret | Required | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | no | AI notes (Haiku for patch, Sonnet for minor/major). Falls back to GitHub's native `generate-notes`, then a minimal commit-list body. Subscription OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`) are **not** accepted here — this workflow calls the raw Messages API, which rejects them; reworking it onto the Claude CLI is the prerequisite for subscription billing. |
+| `ANTHROPIC_API_KEY` | no | AI notes (Haiku for patch, Sonnet for minor/major). Falls back to GitHub's native `generate-notes`, then a minimal commit-list body. Subscription OAuth tokens (`CLAUDE_CODE_OAUTH_TOKEN`) are **not** used here — the workflow's Messages API call authenticates via the `x-api-key` header, which rejects them (401). They do work as `Authorization: Bearer` against the same endpoint (verified 2026-07), but that path is undocumented and subscription OAuth is policy-scoped to Anthropic's official tools — so the supported route to subscription billing is reworking this workflow onto the Claude CLI (`claude -p`). |
 
 **Outputs:**
 
