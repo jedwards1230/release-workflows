@@ -80,17 +80,18 @@ on:
         default: "github-actions"
       draft_on_blocking:
         description: >-
-          When true, if the review posts one or more BLOCKING inline comments the
-          agent converts the PR to a draft (`gh pr ready --undo`). Draft PRs are
+          ON by default. When a review posts one or more BLOCKING inline comments
+          the agent converts the PR to a draft (`gh pr ready --undo`). Draft PRs are
           skipped by this workflow's `if: !draft` gate, so follow-up pushes don't
           auto-review until the author resolves the threads and marks the PR ready
           for review again (which fires `ready_for_review` → a fresh full review).
           This batches re-reviews on churn-heavy PRs into author-controlled cycles
-          instead of one review per push. OFF by default — opt in per repo (e.g.
-          private repos); leave off where bot-initiated drafting is unwanted.
+          instead of one review per push — the main run-count/cost reducer. Repos
+          that don't want bot-initiated drafting opt out with
+          `draft_on_blocking: false`.
         required: false
         type: boolean
-        default: false
+        default: true
       review_drafts:
         description: >-
           When true, disables the default draft-PR skip so draft PRs get
@@ -132,8 +133,12 @@ jobs:
     # PRs by default — dependency bumps are low-signal for AI review, and the
     # skipped check counts as passing so it never blocks merge. (Other bot
     # actors are governed by `allowed_bots`, passed into claude-code-action
-    # below.)
-    if: ${{ (inputs.review_drafts || !github.event.pull_request.draft) && github.actor != 'dependabot[bot]' }}
+    # below.) Dependabot is guarded two ways: `github.actor` catches the PR
+    # Dependabot opens, and the `dependabot/` head-branch prefix catches later
+    # `synchronize` events on the same branch whose actor is NOT dependabot (a
+    # user rebase or a github-actions push) — those slipped past the actor-only
+    # check and cost 2–3 paid review rounds per dependabot PR.
+    if: ${{ (inputs.review_drafts || !github.event.pull_request.draft) && github.actor != 'dependabot[bot]' && !startsWith(github.event.pull_request.head.ref, 'dependabot/') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
