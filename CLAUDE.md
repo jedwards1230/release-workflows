@@ -113,6 +113,17 @@ are **additive** (they append to the defaults, not replace them).
 Frontloads the PR diff, changed-file list, and prior-round bot comments into
 the prompt so the agent reviews from context instead of re-querying.
 
+**Skill-first review depth.** The agent decides per diff how deep to go, biased
+toward the cheap path: by default it loads any installed knowledge skills that
+cover the diff (e.g. a language-quality plugin's review checklist) and reviews
+inline itself; it escalates to specialist agents (Task tool) only for large
+diffs (~300+ changed lines), several dimensions needing real scrutiny, or
+high-stakes surfaces (security/auth/data-integrity/destructive infra) — capped
+at 3 agents, preferring a skill-preloaded language-quality reviewer over a
+generic one. Repos with a matching quality plugin should pass it via
+`extra_plugins` (e.g. `go-quality@jedwards1230-plugins`) so both the skill and
+its reviewer agent are available at review time.
+
 The verdict is delivered by `track_progress`'s live comment. As a safety net, a
 final `Ensure review verdict reached the PR` step posts the agent's result text
 as a comment **only if** it isn't already on the PR — recovering the case (seen
@@ -173,7 +184,7 @@ reserved for the unexpected workflow-validation skip).
 | Input | Default | Notes |
 |---|---|---|
 | `focus` | `""` | Repo-specific guidance appended under `### Focus` |
-| `extra_plugins` | `""` | Newline-separated `name@marketplace` entries |
+| `extra_plugins` | `""` | Newline-separated `name@marketplace` entries. Recommended: the repo's language-quality plugin(s), e.g. `go-quality@jedwards1230-plugins` |
 | `extra_plugin_marketplaces` | `""` | Newline-separated marketplace git URLs |
 | `extra_allowed_tools` | `""` | Comma-separated extra tools appended to the default set |
 | `model` | `claude-haiku-4-5` | Model override |
