@@ -347,7 +347,7 @@ jobs:
       - name: Run Claude PR review
         id: claude
         if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342 # v1.0.171
         with:
           # Prefer the subscription OAuth token; fall back to the metered API
           # key only when no OAuth token was passed. Exactly one is ever set —
