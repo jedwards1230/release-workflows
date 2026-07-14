@@ -111,7 +111,11 @@ Runs `anthropics/claude-code-action@v1` in Haiku PR-review mode. Bakes in the
 are **additive** (they append to the defaults, not replace them).
 
 Frontloads the PR diff, changed-file list, and prior-round bot comments into
-the prompt so the agent reviews from context instead of re-querying.
+the prompt so the agent reviews from context instead of re-querying. The diff
+is annotated with new-file line numbers so the reviewer can anchor inline
+comments directly, and the prompt's output contract requires every actionable
+finding to be posted as an inline comment (the merge-blocking channel) rather
+than listed in the summary — the summary is verdict-only.
 
 **Skill-first review depth.** The agent decides per diff how deep to go, biased
 toward the cheap path: by default it loads any installed knowledge skills that

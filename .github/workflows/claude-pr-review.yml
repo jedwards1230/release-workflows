@@ -312,15 +312,34 @@ jobs:
           [ -z "$NAMESTATUS" ] && NAMESTATUS="(changed-file list unavailable)"
           printf '%s' "$NAMESTATUS" | emit namestatus
 
-          # 2. PR diff — drop generated/asset/lock noise, then cap to a byte
-          #    budget so a huge PR can't blow the context (agent Reads the rest).
+          # 2. PR diff — drop generated/asset/lock noise, annotate each line with
+          #    its new-file line number (so the reviewer can anchor inline comments
+          #    without counting), then cap to a byte budget so a huge PR can't blow
+          #    the context (agent Reads the rest).
           MAX_BYTES=50000
-          DIFF=$(git diff "$BASE_SHA"...HEAD -- . \
+          RAWDIFF=$(git diff "$BASE_SHA"...HEAD -- . \
             ':(exclude)*.lock' ':(exclude)*-lock.json' ':(exclude)*.sum' \
             ':(exclude)*.svg' ':(exclude)*.png' ':(exclude)*.jpg' ':(exclude)*.jpeg' ':(exclude)*.webp' \
             ':(exclude)**/dist/**' ':(exclude)**/vendor/**' ':(exclude)**/node_modules/**' \
             2>/dev/null || true)
-          [ -z "$DIFF" ] && DIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null || true)
+          [ -z "$RAWDIFF" ] && RAWDIFF=$(gh pr diff "$PR_NUMBER" 2>/dev/null || true)
+
+          # Left-pad every hunk line with its new-file line number so the reviewer
+          # passes it straight to the inline-comment `line` (blank prefix = a file
+          # header or a deleted line). Portable awk (POSIX; mawk/gawk/BSD).
+          if [ -n "$RAWDIFF" ]; then
+            DIFF=$(printf '%s\n' "$RAWDIFF" | awk '
+              /^diff --git/ { inhunk=0; print "        " $0; next }
+              /^@@/ { plus=$3; sub(/^\+/,"",plus); sub(/,.*/,"",plus); newln=plus+0; inhunk=1; print "        " $0; next }
+              !inhunk { print "        " $0; next }
+              { c=substr($0,1,1)
+                if (c=="+")      { printf "%6d %s\n", newln, $0; newln++ }
+                else if (c==" ") { printf "%6d %s\n", newln, $0; newln++ }
+                else             { print "        " $0 }
+              }')
+          else
+            DIFF=""
+          fi
           if [ "${#DIFF}" -gt "$MAX_BYTES" ]; then
             # Bash native substring — NOT `printf … | head -c`, which SIGPIPEs
             # printf once head closes the pipe and, under pipefail, fails the
@@ -384,6 +403,10 @@ jobs:
 
             ${{ steps.ctx.outputs.diff }}
 
+            Each diff line is prefixed with its new-file line number — pass that
+            number straight to the `line` argument when you anchor an inline
+            comment on it. A blank prefix means a file/hunk header or a deleted
+            line, which is not anchorable on the new side.
             The changed-file list and diff above are authoritative — review from
             them. Do NOT re-derive them with `gh pr diff` or `git diff`. Use Read
             only to see code surrounding a hunk, and read any given file at most
@@ -447,26 +470,37 @@ jobs:
 
             ${{ inputs.focus }}
 
-            ### Output
+            ### Output — how to deliver findings
 
-            You have two channels, and they carry different weight:
+            Post each finding AS YOU FIND IT, as an inline comment, BEFORE you
+            write any summary. Do not collect them for the end.
 
-            - Inline comments (`mcp__github_inline_comment__create_inline_comment`)
-              are the strong, blocking signal. An unresolved inline comment BLOCKS
-              the merge, so every blocking or actionable problem MUST be an inline
-              comment anchored to the exact file:line, with a concrete fix. Treat
-              it as a louder alert than prose — reach for it deliberately whenever
-              something should stop the merge.
-            - Your final message is the summary body (track_progress posts it to
-              the PR): the overall verdict plus anything not tied to a specific
-              line. When an issue already lives in an inline comment, do NOT
-              restate it in the body — reference it in a few words at most and let
-              the inline thread own the detail. Keep the body scoped and
-              skimmable.
+            Every actionable problem — a blocking bug or a should-fix — is an
+            inline comment (`mcp__github_inline_comment__create_inline_comment`)
+            anchored to a file:line in the diff, with a concrete fix. This is the
+            ONLY channel that blocks the merge: a problem described only in the
+            summary is invisible to the merge gate and will ship. Anchor by the
+            new-file line number shown in the diff; if you are unsure of the exact
+            line, anchor to the nearest changed line and say "near here" — an
+            approximately-anchored comment beats a prose-only finding. Never
+            downgrade a finding to prose because pinning the line is fiddly.
 
-            Only flag real, actionable problems — no nitpicking, no praise. If the
-            change looks good, say so in one line and skip inline comments. Keep
-            total comment volume low: signal over noise.
+            Your summary (the final message track_progress posts to the PR) has
+            exactly two allowed shapes:
+            1. "LGTM — <one-line verdict>." when there are no actionable problems, or
+            2. "<one-line verdict>. See the N inline comments." when there are.
+            It carries the verdict and any genuinely non-line-specific context (an
+            architectural observation, a cross-cutting risk). It must NOT contain a
+            list of bugs/issues/"things to fix" — if you find yourself writing
+            "Issues found:" followed by a list, STOP: each item is an inline
+            comment you have not posted yet. Before finishing, re-read your
+            summary; if it names any problem that is not already an inline comment,
+            you are not done — post that inline comment now.
+
+            Raise FEWER things, not SOFTER things. Low volume means being selective
+            about what is worth raising at all — skip nitpicks and anything linters
+            own, no praise — NOT routing real findings into prose. Once something is
+            worth raising, it is an inline comment.
 
             ${{ steps.compose.outputs.draft_prompt }}
 
