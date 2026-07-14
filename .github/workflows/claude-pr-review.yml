@@ -475,6 +475,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # Safety net for a track_progress gap: claude-code-action posts the
@@ -496,26 +497,26 @@ jobs:
             exit 0
           fi
 
-          # Drop a leading track_progress spinner <img …> so the probe below
-          # matches on real verdict prose, not boilerplate the progress comment
-          # also carries.
-          BODY=$(printf '%s' "$RESULT" | sed -E '1s/^<img[^>]*>[[:space:]]*//')
-
-          # Probe = a verbatim, whitespace-normalized slice of the verdict. If a
-          # recent bot comment already contains it, the progress comment posted
-          # the review and no fallback is needed. Prefer an interior slice (past
-          # any shared header); fall back to the head for short verdicts.
-          NORM_BODY=$(printf '%s' "$BODY" | tr '\n' ' ' | tr -s ' ')
-          PROBE=${NORM_BODY:200:120}
-          [ -z "$PROBE" ] && PROBE=${NORM_BODY:0:120}
-
-          FOUND=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-            --jq '.[] | select(.user.type=="Bot") | .body' 2>/dev/null \
-            | tr '\n' ' ' | tr -s ' ' | grep -F -- "$PROBE")
-          if [ -n "$FOUND" ]; then
-            echo "verdict already present in a bot comment; no fallback needed"
+          # Idempotency keyed on this run's id, not a fuzzy content slice.
+          # claude-code-action's track_progress posts its comment as a bot with a
+          # "View job" link back to THIS run (…/actions/runs/<run_id>), and once
+          # done its header reads "Claude finished …'s task in …". If a bot comment
+          # for this run carries that finished header, the verdict already reached
+          # the PR — skip the fallback. Matching the positive "finished" signal
+          # fails safe: if the header ever drifts the worst case is a cosmetic
+          # double-post, not a suppressed verdict (the case this net guards).
+          # (The prior approach matched a 120-char slice of the raw result against
+          # the reformatted progress comment; it never matched, so the fallback
+          # double-posted on every run.)
+          RUN_COMMENT=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+            --jq ".[] | select(.user.type==\"Bot\") | select(.body | contains(\"/runs/$RUN_ID\")) | .body" 2>/dev/null)
+          if printf '%s' "$RUN_COMMENT" | grep -qiF "Claude finished"; then
+            echo "track_progress verdict for this run reached the PR; no fallback needed"
             exit 0
           fi
+
+          # Drop a leading track_progress spinner <img …> before posting.
+          BODY=$(printf '%s' "$RESULT" | sed -E '1s/^<img[^>]*>[[:space:]]*//')
 
           echo "verdict missing from PR comments; posting fallback summary"
           {
