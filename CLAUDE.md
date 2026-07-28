@@ -35,6 +35,7 @@ or returns a base64-encoded body for the caller to chain build/publish jobs.
 | `service_description` | string | no | `""` | One-liner for the AI prompt |
 | `bump_type` | string | yes | — | `patch`, `minor`, or `major` |
 | `version_override` | string | no | `""` | Explicit `X.Y.Z`; overrides `bump_type` |
+| `tag_prefix` | string | no | `""` | Prefix before the `v` (e.g. `host-` → `host-v1.2.3`). Scopes both the previous-version lookup and the created tag, so a monorepo can release several artifacts on independent version lines. Empty = plain `vX.Y.Z`. |
 | `chart_path` | string | no | `""` | Path to `Chart.yaml` to bump (committed into tag only) |
 | `release_branch` | string | no | `main` | Branch to release from |
 | `dry_run` | boolean | no | `false` | Preview without tagging or releasing |
@@ -51,7 +52,7 @@ or returns a base64-encoded body for the caller to chain build/publish jobs.
 
 | Output | Notes |
 |---|---|
-| `tag` | e.g. `v1.2.3` |
+| `tag` | e.g. `v1.2.3`, or `host-v1.2.3` when `tag_prefix` is set |
 | `version` | e.g. `1.2.3` |
 | `prev_tag` | Previous semver tag (or root commit) |
 | `changelog_ref` | Diff baseline (cumulative for minor/major) |

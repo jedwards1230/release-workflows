@@ -35,6 +35,16 @@ on:
         required: false
         type: string
         default: ""
+      tag_prefix:
+        description: >-
+          Prefix before the `v` in tag names, for monorepos that release several
+          artifacts independently (e.g. 'host-' → host-v1.2.3). Scopes BOTH the
+          lookup of the previous version and the tag that gets created, so each
+          artifact versions on its own line. Empty (default) = plain vX.Y.Z,
+          identical to the previous behaviour.
+        required: false
+        type: string
+        default: ""
       chart_path:
         description: "Path to a Chart.yaml whose version + appVersion should be bumped (committed into tag, not pushed to main). Empty = skip."
         required: false
@@ -116,11 +126,16 @@ jobs:
         env:
           BUMP_TYPE_IN: ${{ inputs.bump_type }}
           OVERRIDE: ${{ inputs.version_override }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
 
-          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1 || true)
+          # Every tag reference below is prefix-scoped. With an empty TAG_PREFIX
+          # this is byte-identical to the previous plain-vX.Y.Z behaviour; with
+          # one set, each artifact in a monorepo versions on its own line and
+          # cannot read another artifact's tags as its own history.
+          LATEST_TAG=$(git tag -l "${TAG_PREFIX}v[0-9]*.[0-9]*.[0-9]*" | sort -V | tail -n1 || true)
 
           if [ -z "$LATEST_TAG" ]; then
             PREV_REF=$(git rev-list --max-parents=0 HEAD)
@@ -128,7 +143,7 @@ jobs:
             echo "No existing semver tags found, starting from 0.0.0"
           else
             PREV_REF="$LATEST_TAG"
-            LATEST_VERSION="${LATEST_TAG#v}"
+            LATEST_VERSION="${LATEST_TAG#"${TAG_PREFIX}"v}"
             MAJOR=$(echo "$LATEST_VERSION" | cut -d. -f1)
             MINOR=$(echo "$LATEST_VERSION" | cut -d. -f2)
             PATCH=$(echo "$LATEST_VERSION" | cut -d. -f3)
@@ -161,11 +176,11 @@ jobs:
             esac
           fi
 
-          NEXT_TAG="v${NEXT_VERSION}"
+          NEXT_TAG="${TAG_PREFIX}v${NEXT_VERSION}"
 
           if git rev-parse "$NEXT_TAG" >/dev/null 2>&1; then
             if [ "$DRY_RUN" = "true" ]; then
-              PREV_REF=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | grep -B1 "^${NEXT_TAG}$" | head -1)
+              PREV_REF=$(git tag -l "${TAG_PREFIX}v[0-9]*.[0-9]*.[0-9]*" | sort -V | grep -B1 "^${NEXT_TAG}$" | head -1)
               if [ "$PREV_REF" = "$NEXT_TAG" ]; then
                 PREV_REF=$(git rev-list --max-parents=0 HEAD)
               fi
@@ -182,14 +197,14 @@ jobs:
           CHANGELOG_REF="$PREV_REF"
           case "$BUMP_TYPE" in
             minor)
-              MINOR_BASE_TAG="v${MAJOR}.${MINOR}.0"
+              MINOR_BASE_TAG="${TAG_PREFIX}v${MAJOR}.${MINOR}.0"
               if git rev-parse "$MINOR_BASE_TAG" >/dev/null 2>&1; then
                 CHANGELOG_REF="$MINOR_BASE_TAG"
                 echo "Minor bump: using cumulative diff from $MINOR_BASE_TAG"
               fi
               ;;
             major)
-              MAJOR_BASE_TAG="v${MAJOR}.0.0"
+              MAJOR_BASE_TAG="${TAG_PREFIX}v${MAJOR}.0.0"
               if git rev-parse "$MAJOR_BASE_TAG" >/dev/null 2>&1; then
                 CHANGELOG_REF="$MAJOR_BASE_TAG"
                 echo "Major bump: using cumulative diff from $MAJOR_BASE_TAG"

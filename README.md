@@ -29,6 +29,7 @@ Full-featured release workflow: computes the next version (semver bump or explic
 | `service_description` | One-line description used in the AI prompt | No | - |
 | `bump_type` | `patch`, `minor`, or `major` | Yes | - |
 | `version_override` | Explicit `X.Y.Z` (ignores `bump_type`) | No | - |
+| `tag_prefix` | Prefix before the `v` (e.g. `host-` → `host-v1.2.3`), for monorepos releasing several artifacts independently. Scopes both the previous-version lookup and the created tag. | No | `""` |
 | `chart_path` | Path to a `Chart.yaml` to bump (committed into tag, not pushed to main) | No | - |
 | `release_branch` | Branch to release from | No | `main` |
 | `dry_run` | Compute and preview without tagging | No | `false` |
