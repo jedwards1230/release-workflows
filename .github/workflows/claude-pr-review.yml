@@ -502,14 +502,44 @@ jobs:
                 comments.">
 
                 <details>
-                <summary>Review details</summary>
+                <summary>Verified clean</summary>
 
-                <Everything that is not the verdict: a cross-cutting risk, an
-                architectural observation, what you checked and found clean, why
-                you dismissed a plausible-looking non-issue, which skills or
-                agents you used. Omit this block entirely when you have nothing
-                to put in it.>
+                <What you examined and found fine, so a later reader knows it
+                was covered rather than skipped.>
                 </details>
+
+                <details>
+                <summary>Non-issues considered</summary>
+
+                <A plausible-looking problem you checked and dismissed, and the
+                evidence that dismissed it.>
+                </details>
+
+            Use SEPARATE <details> blocks, one topic each, with a `<summary>`
+            label that names what is inside — not one grab-bag block. The label
+            is the whole point: it lets a reader expand only the part they want.
+            Two to four blocks is the normal range and five is the ceiling; drop
+            to one, or to none at all, when that is all you genuinely have. Never
+            pad a block or split one topic in two to reach a count — an empty
+            <details> is worse than no <details>, and a clean review whose whole
+            summary is a single verdict line is a good review.
+
+            Prefer these labels, in this order, and skip any that do not apply:
+
+            - `What I checked` — scope and coverage: which files or surfaces you
+              actually reviewed, and anything you deliberately did not.
+            - `Verified clean` — what you examined and found fine.
+            - `Architectural notes` — an observation about the design that is
+              not a defect and not tied to one line.
+            - `Cross-cutting risk` — a risk that spans files, or that lands
+              outside this diff.
+            - `Non-issues considered` — plausible-looking problems you dismissed,
+              with the evidence.
+            - `Review approach` — the skills or agents you used and the depth you
+              chose, when that is not obvious.
+
+            Add your own label instead when none of these fits, following the
+            same rule: it names the contents, and it covers one topic.
 
             Verdict emoji: 🔴 blocking issue · 🟡 changes recommended · 🟢 no
             actionable problems.

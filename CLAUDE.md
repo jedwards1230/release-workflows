@@ -120,12 +120,16 @@ than listed in the summary.
 
 **The summary is ranked, not flat.** A one-line `### <emoji> <verdict>` heading
 (🔴 blocking · 🟡 changes recommended · 🟢 clean) plus at most two sentences stay
-visible; everything else — cross-cutting risk, an architectural observation,
-what was checked and found clean, why a plausible-looking non-issue was
-dismissed — goes in a collapsed `<details>` block. The reader learns the outcome
-without scanning, and a clean pass costs a line instead of a screen. `<details>`
-is for context only: collapsing a real finding is treated as the same mistake as
-leaving it in prose, since both are invisible to the merge gate.
+visible; everything else goes into **separate labeled `<details>` blocks**, one
+topic each, from a preferred set (`What I checked`, `Verified clean`,
+`Architectural notes`, `Cross-cutting risk`, `Non-issues considered`, `Review
+approach`). Two to four is the normal range, five the ceiling, and none at all
+is correct when there's nothing to say — a clean review whose whole summary is
+one verdict line is a good review. One grab-bag block defeats the purpose: the
+`<summary>` label is what lets a reader expand only the part they want.
+`<details>` is for context only — collapsing a real finding is treated as the
+same mistake as leaving it in prose, since both are invisible to the merge
+gate.
 
 **Skill-first review depth.** The agent decides per diff how deep to go, biased
 toward the cheap path: by default it loads any installed knowledge skills that
