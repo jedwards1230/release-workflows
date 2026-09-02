@@ -1,7 +1,9 @@
 # This repo's own release: manually dispatched. Self-releases via ai-release.yml
-# (the reusable workflow this repo publishes), then force-moves the v0 / v0.x
-# tags that consumers pin to the new immutable vX.Y.Z. ai-release.yml only
-# creates immutable tags, so this moving-tag job is what keeps `@v0` advancing.
+# (the reusable workflow this repo publishes), then force-moves the major /
+# major.minor tags that consumers pin (today `v1` / `v1.x`) to the new immutable
+# vX.Y.Z. ai-release.yml only creates immutable tags, so this moving-tag job is
+# what keeps `@v1` advancing. The job derives the tag names from the new
+# version, so it follows a major bump without edits here.
 name: Release Workflows
 
 run-name: >-
@@ -40,8 +42,9 @@ jobs:
         secrets:
             ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
-    # Maintain the moving v0 / v0.x tags consumers pin (@v0). ai-release.yml
-    # only cuts the immutable vX.Y.Z; this points the major/minor tags at it.
+    # Maintain the moving major / major.minor tags consumers pin (today `@v1`).
+    # ai-release.yml only cuts the immutable vX.Y.Z; this points the major and
+    # major.minor tags at it, deriving both from the new version.
     moving-tags:
         needs: release
         if: needs.release.outputs.tag != ''
