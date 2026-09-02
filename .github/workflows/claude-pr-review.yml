@@ -271,10 +271,11 @@ jobs:
               echo '"consider" suggestions. A blocking issue is one you raised as an inline comment.'
               echo ''
               echo '- If you posted ONE OR MORE blocking inline comments: convert this PR to a draft'
-              printf '  by running `gh pr ready %s --undo`. Then, in your summary body,\n' "$PR_NUMBER"
-              echo '  state plainly that you set the PR to draft to pause automatic re-reviews, and'
-              echo '  that the author should address the blocking inline comments, resolve those'
-              echo '  threads, and mark the PR "Ready for review" to request a fresh review.'
+              printf '  by running `gh pr ready %s --undo`. Then, in the VISIBLE part of your\n' "$PR_NUMBER"
+              echo '  summary (never inside the <details> block), state plainly that you set the PR'
+              echo '  to draft to pause automatic re-reviews, and that the author should address the'
+              echo '  blocking inline comments, resolve those threads, and mark the PR'
+              echo '  "Ready for review" to request a fresh review. Use the 🔴 verdict emoji.'
               echo '- If you found NO blocking issues (clean, or only nits/suggestions): do NOT'
               echo '  convert to draft. Leave the PR as-is.'
               echo ''
@@ -485,17 +486,44 @@ jobs:
             approximately-anchored comment beats a prose-only finding. Never
             downgrade a finding to prose because pinning the line is fiddly.
 
-            Your summary (the final message track_progress posts to the PR) has
-            exactly two allowed shapes:
-            1. "LGTM — <one-line verdict>." when there are no actionable problems, or
-            2. "<one-line verdict>. See the N inline comments." when there are.
-            It carries the verdict and any genuinely non-line-specific context (an
-            architectural observation, a cross-cutting risk). It must NOT contain a
-            list of bugs/issues/"things to fix" — if you find yourself writing
-            "Issues found:" followed by a list, STOP: each item is an inline
-            comment you have not posted yet. Before finishing, re-read your
-            summary; if it names any problem that is not already an inline comment,
-            you are not done — post that inline comment now.
+            Your summary (the final message track_progress posts to the PR) is
+            RANKED, not flat: what the reader must act on stays visible, and
+            everything else goes behind a collapsed <details> block. A verdict
+            buried under a checklist and a list of strengths reads as heavy even
+            when it says "nothing to do" — the reader should learn the outcome
+            without scanning.
+
+            Shape it exactly like this:
+
+                ### <emoji> <one-line verdict>
+
+                <At most two sentences, and only what the reader must act on.
+                When you posted inline comments, end with "See the N inline
+                comments.">
+
+                <details>
+                <summary>Review details</summary>
+
+                <Everything that is not the verdict: a cross-cutting risk, an
+                architectural observation, what you checked and found clean, why
+                you dismissed a plausible-looking non-issue, which skills or
+                agents you used. Omit this block entirely when you have nothing
+                to put in it.>
+                </details>
+
+            Verdict emoji: 🔴 blocking issue · 🟡 changes recommended · 🟢 no
+            actionable problems.
+
+            <details> is for CONTEXT, never for findings. Collapsing a real
+            problem is the same mistake as leaving it in prose — it is invisible
+            to the merge gate either way, and now invisible to the reader too.
+
+            The visible part must NOT contain a list of bugs/issues/"things to
+            fix" — if you find yourself writing "Issues found:" followed by a
+            list, STOP: each item is an inline comment you have not posted yet.
+            Before finishing, re-read your summary; if it names any problem that
+            is not already an inline comment, you are not done — post that
+            inline comment now.
 
             Raise FEWER things, not SOFTER things. Low volume means being selective
             about what is worth raising at all — skip nitpicks and anything linters

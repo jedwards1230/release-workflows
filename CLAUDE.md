@@ -116,7 +116,16 @@ the prompt so the agent reviews from context instead of re-querying. The diff
 is annotated with new-file line numbers so the reviewer can anchor inline
 comments directly, and the prompt's output contract requires every actionable
 finding to be posted as an inline comment (the merge-blocking channel) rather
-than listed in the summary — the summary is verdict-only.
+than listed in the summary.
+
+**The summary is ranked, not flat.** A one-line `### <emoji> <verdict>` heading
+(🔴 blocking · 🟡 changes recommended · 🟢 clean) plus at most two sentences stay
+visible; everything else — cross-cutting risk, an architectural observation,
+what was checked and found clean, why a plausible-looking non-issue was
+dismissed — goes in a collapsed `<details>` block. The reader learns the outcome
+without scanning, and a clean pass costs a line instead of a screen. `<details>`
+is for context only: collapsing a real finding is treated as the same mistake as
+leaving it in prose, since both are invisible to the merge gate.
 
 **Skill-first review depth.** The agent decides per diff how deep to go, biased
 toward the cheap path: by default it loads any installed knowledge skills that
