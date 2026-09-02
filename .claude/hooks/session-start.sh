@@ -9,7 +9,7 @@ set +e  # Never exit on error in session-start
 
 if [ "${CLAUDE_CODE_REMOTE:-}" = "true" ]; then
   echo "[session-start] Running in Claude Code Web (ephemeral container)" >&2
-  
+
   # Install shellcheck if not present
   if ! command -v shellcheck &>/dev/null; then
     echo "[session-start] Installing shellcheck..." >&2
