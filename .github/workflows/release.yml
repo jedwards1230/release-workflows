@@ -42,9 +42,9 @@ jobs:
         secrets:
             ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
-    # Maintain the moving major / major.minor tags consumers pin (today `@v1`).
-    # ai-release.yml only cuts the immutable vX.Y.Z; this points the major and
-    # major.minor tags at it, deriving both from the new version.
+    # Maintain the moving major / major.minor tags consumers pin (today `v1`
+    # and `v1.8`). ai-release.yml only cuts the immutable vX.Y.Z; this points
+    # the major and major.minor tags at it, deriving both from the new version.
     moving-tags:
         needs: release
         if: needs.release.outputs.tag != ''
