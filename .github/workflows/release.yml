@@ -1,9 +1,9 @@
 # This repo's own release: manually dispatched. Self-releases via ai-release.yml
 # (the reusable workflow this repo publishes), then force-moves the major /
-# major.minor tags that consumers pin (today `v1` and `v1.8`) to the new immutable
-# vX.Y.Z. ai-release.yml only creates immutable tags, so this moving-tag job is
-# what keeps `@v1` advancing. The job derives the tag names from the new
-# version, so it follows a major bump without edits here.
+# major.minor tags that consumers pin (today `v1` and `v1.8`) to the new
+# immutable vX.Y.Z. ai-release.yml only creates immutable tags, so this
+# moving-tag job is what keeps `@v1` advancing. The job derives the tag names
+# from the new version, so it follows a major bump without edits here.
 name: Release Workflows
 
 run-name: >-
