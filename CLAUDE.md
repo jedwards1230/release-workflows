@@ -142,9 +142,9 @@ on domain knowledge no loaded skill covers** — capped at 3 agents, preferring 
 skill-preloaded language-quality reviewer over a generic one. That last trigger
 is the one most often missed: with no matching skill the reviewer is working
 from general knowledge, and the failure mode is a confident wrong claim about a
-half-known API, not silence. Repos with a matching quality plugin should pass it via
-`extra_plugins` (e.g. `go-quality@jedwards1230-plugins`) so both the skill and
-its reviewer agent are available at review time.
+half-known API, not silence. Repos with a matching quality plugin should pass
+it via `extra_plugins` (e.g. `go-quality@jedwards1230-plugins`) so both the
+skill and its reviewer agent are available at review time.
 
 The verdict is delivered by `track_progress`'s live comment. As a safety net, a
 final `Ensure review verdict reached the PR` step posts the agent's result text
