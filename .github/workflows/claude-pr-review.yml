@@ -263,25 +263,26 @@ jobs:
               echo '### Blocking issues → convert this PR to draft'
               echo ''
               echo 'This repo has draft-on-blocking enabled. AFTER you have posted all inline'
-              echo 'comments and your summary, decide whether this review found any BLOCKING issue.'
+              echo 'comments and BEFORE you write your summary, decide whether this review found'
+              echo 'any BLOCKING issue — the summary has to reflect that decision, so make it first.'
               echo ''
               echo 'BLOCKING means an issue that should stop the merge: a correctness bug, a'
               echo 'security or data-integrity flaw, a broken build/interface, or a clearly wrong'
               echo 'behavior. It does NOT mean nits, style, naming, optional refactors, or'
               echo '"consider" suggestions. A blocking issue is one you raised as an inline comment.'
               echo ''
-              echo '- If you posted ONE OR MORE blocking inline comments: convert this PR to a draft'
-              printf '  by running `gh pr ready %s --undo`. Then, in the VISIBLE part of your\n' "$PR_NUMBER"
-              echo '  summary (never inside the <details> block), state plainly that you set the PR'
-              echo '  to draft to pause automatic re-reviews, and that the author should address the'
-              echo '  blocking inline comments, resolve those threads, and mark the PR'
-              echo '  "Ready for review" to request a fresh review. Use the 🔴 verdict emoji.'
+              echo '- If you posted ONE OR MORE blocking inline comments: write the summary with the'
+              echo '  🔴 verdict emoji, and in its VISIBLE part (never inside a <details> block)'
+              echo '  state plainly that you are setting the PR to draft to pause automatic'
+              echo '  re-reviews, and that the author should address the blocking inline comments,'
+              echo '  resolve those threads, and mark the PR "Ready for review" to request a fresh'
+              printf '  review. Then run `gh pr ready %s --undo` as your final action.\n' "$PR_NUMBER"
               echo '- If you found NO blocking issues (clean, or only nits/suggestions): do NOT'
               echo '  convert to draft. Leave the PR as-is.'
               echo ''
-              echo 'Convert to draft at most once, as your final action, and only when the bar'
-              echo 'above is genuinely met — drafting is a strong signal, so do not use it for'
-              echo 'minor or discretionary feedback.'
+              echo 'Convert to draft at most once, and only when the bar above is genuinely met'
+              echo '— drafting is a strong signal, so do not use it for minor or discretionary'
+              echo 'feedback.'
             fi
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
@@ -488,7 +489,7 @@ jobs:
 
             Your summary (the final message track_progress posts to the PR) is
             RANKED, not flat: what the reader must act on stays visible, and
-            everything else goes behind a collapsed <details> block. A verdict
+            everything else goes behind collapsed <details> blocks. A verdict
             buried under a checklist and a list of strengths reads as heavy even
             when it says "nothing to do" — the reader should learn the outcome
             without scanning.

@@ -119,7 +119,8 @@ finding to be posted as an inline comment (the merge-blocking channel) rather
 than listed in the summary.
 
 **The summary is ranked, not flat.** A one-line `### <emoji> <verdict>` heading
-(🔴 blocking · 🟡 changes recommended · 🟢 clean) plus at most two sentences stay
+(🔴 blocking issue · 🟡 changes recommended · 🟢 no actionable problems) plus at
+most two sentences stay
 visible; everything else goes into **separate labeled `<details>` blocks**, one
 topic each, from a preferred set (`What I checked`, `Verified clean`,
 `Architectural notes`, `Cross-cutting risk`, `Non-issues considered`, `Review
