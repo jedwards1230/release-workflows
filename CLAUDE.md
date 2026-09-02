@@ -135,11 +135,14 @@ gate.
 **Skill-first review depth.** The agent decides per diff how deep to go, biased
 toward the cheap path: by default it loads any installed knowledge skills that
 cover the diff (e.g. a language-quality plugin's review checklist) and reviews
-inline itself; it escalates to specialist agents (Task tool) only for large
-diffs (~300+ changed lines), several dimensions needing real scrutiny, or
-high-stakes surfaces (security/auth/data-integrity/destructive infra) — capped
-at 3 agents, preferring a skill-preloaded language-quality reviewer over a
-generic one. Repos with a matching quality plugin should pass it via
+inline itself; it escalates to specialist agents (Task tool) for large diffs
+(~300+ changed lines), several dimensions needing real scrutiny, high-stakes
+surfaces (security/auth/data-integrity/destructive infra), **or a diff turning
+on domain knowledge no loaded skill covers** — capped at 3 agents, preferring a
+skill-preloaded language-quality reviewer over a generic one. That last trigger
+is the one most often missed: with no matching skill the reviewer is working
+from general knowledge, and the failure mode is a confident wrong claim about a
+half-known API, not silence. Repos with a matching quality plugin should pass it via
 `extra_plugins` (e.g. `go-quality@jedwards1230-plugins`) so both the skill and
 its reviewer agent are available at review time.
 

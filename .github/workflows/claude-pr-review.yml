@@ -435,21 +435,36 @@ jobs:
             agents (Task tool). Bias toward skills — a skill load costs a small
             fraction of a delegated agent.
 
-            Default: review inline yourself, armed with skills. Check the skills
-            available to you for any that cover what the diff touches —
+            Default: review inline yourself, armed with skills — but only where
+            a skill actually covers the diff. Check the skills available to you
+            for any that cover what the diff touches —
             language/domain quality skills (Go, Rust, QML, Ansible, OpenTofu, …)
             carry the review checklist and severity rubric for their domain.
             Invoke each relevant one with the Skill tool before reviewing (a
             mixed-language diff loads several), then work its checklist against
             the diff yourself. This is the right depth for most PRs.
 
-            Escalate to specialist agents only when the change genuinely
-            outgrows a single reviewer: a large diff (roughly 300+ changed lines
-            across several files), several distinct dimensions each needing real
-            scrutiny, or a high-stakes surface (security, auth, data integrity,
-            destructive infrastructure changes) where an independent second pass
-            earns its cost. When you do delegate: match each dimension to the
-            best-fitting agent available to you (read their descriptions —
+            Escalate to specialist agents when the change outgrows a single
+            reviewer: a large diff (roughly 300+ changed lines across several
+            files), several distinct dimensions each needing real scrutiny, or a
+            high-stakes surface (security, auth, data integrity, destructive
+            infrastructure changes) where an independent second pass earns its
+            cost.
+
+            Escalate ALSO — and this is the case most often missed — when the
+            diff turns on domain knowledge you have no skill for. If you loaded
+            no skill covering what the diff touches, you are reviewing that
+            domain from general knowledge, and the failure mode is not silence:
+            it is a confident, specific, wrong claim about an API you half-know.
+            A repo whose caller passes no matching quality plugin is exactly
+            where this bites, because nothing else in this prompt will catch it.
+            In that case delegate to the best-fitting agent available (a
+            review-team specialist if nothing closer is installed) instead of
+            asserting the domain call yourself, or say plainly in the finding
+            that you could not verify it.
+
+            When you do delegate: match each dimension to the best-fitting
+            agent available to you (read their descriptions —
             prefer a language-quality reviewer over a generic one when both are
             installed; do not assume a fixed roster), launch at most 3, one Task
             call each, and hand each enough to work alone: the repo name, the
