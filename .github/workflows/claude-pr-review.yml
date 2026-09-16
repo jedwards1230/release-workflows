@@ -39,6 +39,12 @@
 #         focus: |
 #           - Path traversal in the /raw and .md handlers.
 #           - html/template vs text/template misuse (XSS).
+#         system_packages: libdbus-1-dev   # apt packages the repo's build needs
+#
+# `system_packages` exists because the runner image carries no repo-specific
+# system libraries. A repo whose test command links against one sees the agent
+# report a build failure that is an environment gap, not a finding about the
+# diff — install it here and the review is about the code again.
 name: PR Review
 
 run-name: "Review PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
@@ -110,6 +116,19 @@ on:
         required: false
         type: boolean
         default: false
+      system_packages:
+        description: >-
+          Whitespace- or newline-separated apt packages to install on the runner
+          before the agent starts. The runner image ships no repo-specific
+          system libraries, so a repo whose build or test command needs one
+          (e.g. `libdbus-1-dev` for a zbus/bluer dependency graph) otherwise has
+          the agent trip over a linker error that is an environment gap, not a
+          code defect. Package names only — each must match
+          `^[a-z0-9][a-z0-9._+-]*$`, and anything else fails the job rather than
+          reaching the shell. Empty by default: no apt call is made at all.
+        required: false
+        type: string
+        default: ""
       skip_docs_only:
         description: >-
           When true (default), skip review when every changed file is
@@ -199,6 +218,36 @@ jobs:
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # The hosted runner carries no repo-specific system libraries, so a repo
+      # whose tests link against one fails in review for a reason that has
+      # nothing to do with the diff. Callers name what they need; we install it
+      # before the agent starts. Skipped entirely on a docs-only diff, where the
+      # review does not run.
+      - name: Install caller-requested system packages
+        if: ${{ inputs.system_packages != '' && steps.docsonly.outputs.skip != 'true' }}
+        env:
+          SYSTEM_PACKAGES: ${{ inputs.system_packages }}
+        run: |
+          set -euo pipefail
+          # Validate before anything reaches apt: the input is caller-supplied
+          # and lands in a command line, so restrict it to package-name shape.
+          PKGS=""
+          for pkg in $SYSTEM_PACKAGES; do
+            if ! printf '%s' "$pkg" | grep -Eq '^[a-z0-9][a-z0-9._+-]*$'; then
+              echo "::error title=Invalid system_packages entry::'$pkg' is not a valid apt package name."
+              exit 1
+            fi
+            PKGS="$PKGS $pkg"
+          done
+          if [ -z "${PKGS// /}" ]; then
+            echo "system_packages was whitespace only — nothing to install."
+            exit 0
+          fi
+          echo "Installing:$PKGS"
+          sudo apt-get update
+          # shellcheck disable=SC2086 # deliberate word-splitting; every name is validated above
+          sudo apt-get install -y --no-install-recommends $PKGS
 
       - name: Compose plugin + tool config (defaults + additive inputs)
         id: compose
