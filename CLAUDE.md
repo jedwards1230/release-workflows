@@ -209,7 +209,7 @@ reserved for the unexpected workflow-validation skip).
 | `extra_plugins` | `""` | Newline-separated `name@marketplace` entries. Recommended: the repo's language-quality plugin(s), e.g. `go-quality@jedwards1230-plugins` |
 | `extra_plugin_marketplaces` | `""` | Newline-separated marketplace git URLs |
 | `extra_allowed_tools` | `""` | Comma-separated extra tools appended to the default set |
-| `model` | `claude-haiku-4-5` | Model override |
+| `model` | `claude-haiku-5-5` | Model override |
 | `max_turns` | `50` | Max agent turns |
 | `allowed_bots` | `github-actions` | Bot actors allowed to trigger review |
 | `draft_on_blocking` | `true` | ON by default. A review that posts blocking inline comments flips the PR to draft (`gh pr ready --undo`), pausing auto-reviews until the author resolves threads and marks it ready. Batches re-reviews on churn-heavy PRs into author-controlled cycles — the main run-count/cost reducer. Opt out with `draft_on_blocking: false` where bot-initiated drafting is unwanted. |
@@ -317,8 +317,9 @@ Current stable: `@v1` (v1.x.x line). `@v0` is frozen.
   range) it falls back to first-parent non-merge commits, so squashed PRs still
   get AI notes — the AI step only truly skips when the range is genuinely empty.
 - Model selection: Haiku for patch (fast/cheap), Sonnet for minor/major. Both
-  use **floating aliases** (`claude-haiku-4-5`, `claude-sonnet-4-6`) to match the
-  PR-review default and avoid pinning a snapshot that goes stale. Trade-off:
+  use undated model IDs (`claude-haiku-5-5`, `claude-sonnet-4-6`) to match the
+  PR-review default; Sonnet's is a **floating alias**, while Haiku 5.5's ID is
+  itself fixed (no dated snapshot/alias split). Trade-off:
   model *capability* can shift over time, so re-running a release on a later date
   may word the notes differently. Notes were never byte-reproducible anyway (the
   diff/commits differ per run, no `temperature: 0`); a consumer that needs a

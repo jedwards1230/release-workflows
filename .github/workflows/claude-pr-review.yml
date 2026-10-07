@@ -76,7 +76,7 @@ on:
         description: "Model for the review."
         required: false
         type: string
-        default: "claude-haiku-4-5"
+        default: "claude-haiku-5-5"
       max_turns:
         description: "Max agent turns."
         required: false
