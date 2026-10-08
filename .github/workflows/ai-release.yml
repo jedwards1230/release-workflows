@@ -369,7 +369,7 @@ jobs:
               echo "Selected Sonnet for $BUMP_TYPE release (higher quality on cumulative notes)"
               ;;
             *)
-              echo "model=claude-haiku-4-5" >> "$GITHUB_OUTPUT"
+              echo "model=claude-haiku-5-5" >> "$GITHUB_OUTPUT"
               echo "Selected Haiku for patch release (fast and cheap)"
               ;;
           esac
@@ -453,14 +453,14 @@ jobs:
             --rawfile prs /tmp/prs.txt \
             '{
               model: $model,
-              max_tokens: 4096,
+              max_tokens: 16000,
               messages: [{
                 role: "user",
                 content: ($prompt + "\n\n## Commits\n" + $commits + "\n\n## Merged PRs\n" + $prs + "\n\n## Diff Stats\n" + $diffstat + "\n\n## Full Diff\n" + $diff)
               }]
             }' > /tmp/request.json
 
-          HTTP_CODE=$(curl -s --max-time 120 -w '%{http_code}' -o /tmp/response.json \
+          HTTP_CODE=$(curl -s --max-time 300 -w '%{http_code}' -o /tmp/response.json \
             -X POST https://api.anthropic.com/v1/messages \
             -H "content-type: application/json" \
             -H "x-api-key: ${ANTHROPIC_API_KEY}" \
@@ -473,7 +473,25 @@ jobs:
             exit 1
           fi
 
-          jq -r '.content[0].text' /tmp/response.json > /tmp/release_notes.txt
+          # Only a complete answer is publishable. Adaptive-thinking models (e.g.
+          # Haiku 5.5) spend thinking from the same max_tokens budget (hence
+          # 16000), so a big diff can stop at max_tokens with partial notes;
+          # stop_reason "refusal" may carry no text. Anything but end_turn exits
+          # before writing release_notes.txt, so the body step falls back to
+          # native notes instead of publishing truncated ones.
+          STOP_REASON=$(jq -r '.stop_reason // "?"' /tmp/response.json)
+          if [ "$STOP_REASON" != "end_turn" ]; then
+            echo "Anthropic API ($MODEL) stopped with stop_reason=$STOP_REASON; not publishing partial notes"
+            exit 1
+          fi
+          # Select text blocks by type: a response may lead with a `thinking`
+          # block, so `.content[0].text` would yield "null".
+          NOTES=$(jq -r '[.content[]? | select(.type=="text") | .text] | join("")' /tmp/response.json)
+          if [ -z "${NOTES//[[:space:]]/}" ]; then
+            echo "Anthropic API ($MODEL) returned no text (stop_reason: $STOP_REASON)"
+            exit 1
+          fi
+          printf '%s\n' "$NOTES" > /tmp/release_notes.txt
           echo "Release notes generated ($(wc -c < /tmp/release_notes.txt) bytes)"
 
           # Surface token usage so release-notes spend is visible in the summary.
