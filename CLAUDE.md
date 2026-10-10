@@ -205,9 +205,10 @@ reserved for the unexpected workflow-validation skip).
 
 **LiteLLM gateway + Lens telemetry (optional, best-effort).** On by default
 whenever the caller repo carries the config; otherwise skipped silently (forks,
-repos not opted in). The workflow joins a Tailscale tailnet via GitHub OIDC
+repos not opted in, callers outside the `jedwards1230` owner). The workflow joins a Tailscale tailnet via GitHub OIDC
 workload identity (`tailscale/github-action`, `tags: tag:ci-llm`, no stored
-Tailscale secret), probes each endpoint with a 10s timeout, and:
+Tailscale secret), probes each endpoint with a 10s timeout (the gateway probe
+also presents the LiteLLM key), and:
 
 - **Gateway** (`LITELLM_CI_BASE_URL` + `LITELLM_CI_KEY`): routes the review's
   model calls through the LiteLLM `/anthropic` pass-through
@@ -222,20 +223,34 @@ Tailscale secret), probes each endpoint with a 10s timeout, and:
   `vcs.repository.name`, `vcs.change.id` (PR number),
   `cicd.pipeline.run.id`/`.attempt`.
 
-The two halves gate independently. A failed tailnet join or an endpoint that
-doesn't answer (no response or 5xx) falls back to direct Anthropic / no
-telemetry with a `::notice::` — the review itself still runs. The job summary
+The two halves gate independently. A failed tailnet join, an endpoint that
+doesn't answer at the start of the run (no response or 5xx), or LiteLLM
+rejecting the key falls back to direct Anthropic / no telemetry with a
+`::notice::`, and the review still runs. If nothing routes, the runner leaves
+the tailnet before the review. A gateway that fails *mid-review* still fails
+the run, and that surfaces as the usual red `is_error` check. The job summary
 records which route each review took. claude-code-action forwards only an
 allowlist of env names to Claude, so the allowlisted ones (base URL, headers,
 the common `OTEL_*`) are set as step env and the rest (traces exporter, content
 flags, enhanced-telemetry beta) go through the action's `settings` input; no
 secret is in the settings JSON.
 
-The tailnet join **must** stay in this reusable file: the Tailscale federated
-identity trusts the OIDC claim
-`job_workflow_ref = jedwards1230/release-workflows/.github/workflows/*`, so a
-caller's own workflow (or a composite action) cannot join — callers reach the
-gateway only through a release-workflows reusable.
+The tailnet join **must** stay in this reusable file. The Tailscale federated
+identity trusts only OIDC tokens with `sub = repo:jedwards1230/*` (the caller
+repo) **and** `job_workflow_ref = jedwards1230/release-workflows/.github/workflows/*`.
+So a caller's own workflow (or a composite action) cannot join, and neither can
+a third-party repo calling this reusable. Callers reach the gateway only through
+a release-workflows reusable.
+
+Two things to know before opting a repo in:
+
+- **The model credential transits LiteLLM.** The caller's
+  `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` is forwarded through the
+  pass-through. LiteLLM's logging must not record forwarded auth headers.
+- **The vars show up in Actions logs.** `vars.*` are not masked, so a public
+  caller repo's logs show the tailnet hostnames and the Tailscale client ID and
+  audience. None of them is usable without a matching OIDC token or tailnet
+  membership. The two keys are secrets and stay masked.
 
 | Caller repo variable (`vars.*`) | Notes |
 |---|---|

@@ -445,9 +445,11 @@ jobs:
       # silently (forks, repos not opted in), and a failed tailnet join or an
       # unreachable endpoint falls back to direct Anthropic / no telemetry with
       # a ::notice::. The gateway and telemetry halves gate independently.
+      # Owner-gated as defense in depth: the Tailscale trust policy already
+      # only accepts tokens whose `sub` is a jedwards1230 repo.
       - name: Detect LiteLLM gateway / Lens telemetry config
         id: llm
-        if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
+        if: ${{ github.repository_owner == 'jedwards1230' && !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
         env:
           HAS_TS: ${{ vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' }}
           HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
@@ -460,10 +462,11 @@ jobs:
             echo "LiteLLM gateway / Lens telemetry not configured — reviewing direct to Anthropic, no telemetry."
           fi
 
-      # Must run in THIS file: the Tailscale federated identity trusts the OIDC
-      # claim job_workflow_ref = jedwards1230/release-workflows/.github/workflows/*,
-      # so a caller's own workflow (or a composite action) can't join. No stored
-      # Tailscale secret — GitHub OIDC (id-token: write) is the credential.
+      # Must run in THIS file: the Tailscale federated identity trusts OIDC
+      # tokens with sub = repo:jedwards1230/* AND job_workflow_ref =
+      # jedwards1230/release-workflows/.github/workflows/*, so a caller's own
+      # workflow (or a composite action) can't join. No stored Tailscale
+      # secret — GitHub OIDC (id-token: write) is the credential.
       - name: Join tailnet (LiteLLM gateway / Lens)
         id: tailnet
         if: ${{ steps.llm.outputs.join == 'true' }}
@@ -478,8 +481,10 @@ jobs:
           retry: 2
 
       # Probe each endpoint with a short timeout and only route to what
-      # answers. Any HTTP status below 500 counts as reachable (the unauth'd
-      # GET is expected to 401/404/405); no answer or a 5xx falls back.
+      # answers: no answer or a 5xx falls back. The gateway probe also sends
+      # the LiteLLM key, so a LiteLLM auth rejection (bad/expired/over-budget
+      # key) falls back too instead of failing every model call. Lens answers
+      # an unauthenticated GET with a 4xx, which counts as reachable.
       - name: Probe LiteLLM gateway / Lens endpoints
         id: route
         if: ${{ steps.llm.outputs.join == 'true' }}
@@ -488,6 +493,7 @@ jobs:
           HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
           HAS_LENS: ${{ vars.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
           BASE_URL: ${{ vars.LITELLM_CI_BASE_URL }}
+          LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}
           OTLP_ENDPOINT: ${{ vars.LENS_CI_OTLP_ENDPOINT }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -497,27 +503,39 @@ jobs:
           set -uo pipefail
           if [ "$JOINED" != "true" ]; then
             echo "::notice title=LiteLLM/Lens skipped::Tailnet join failed — reviewing direct to Anthropic, no telemetry."
+            sudo tailscale down 2>/dev/null || true
             exit 0
           fi
 
           # gateway/telemetry outputs are written only on success; unset = off.
-          reachable() {
-            local code
-            code=$(curl -sS -o /dev/null -m 10 -w '%{http_code}' "$1" 2>/dev/null) || true
-            [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]
+          ROUTED=false
+          BODY="${RUNNER_TEMP}/llm-probe.json"
+          # probe URL [curl args...] → prints the HTTP status ("000" = no answer)
+          probe() {
+            local url=$1; shift
+            curl -sS -o "$BODY" -m 10 -w '%{http_code}' "$@" "$url" 2>/dev/null || true
           }
 
           if [ "$HAS_GATEWAY" = "true" ]; then
-            if reachable "$BASE_URL"; then
-              echo "gateway=true" >> "$GITHUB_OUTPUT"
+            # Header via stdin (-H @-) so the key never lands on the curl argv.
+            CODE=$(printf 'x-litellm-api-key: Bearer %s\n' "$LITELLM_CI_KEY" | probe "${BASE_URL%/}/v1/models" -H @-)
+            CODE=${CODE:-000}
+            if [ "$CODE" = "000" ] || [ "$CODE" -ge 500 ]; then
+              echo "::notice title=LiteLLM gateway unreachable::LITELLM_CI_BASE_URL did not answer (HTTP $CODE) — reviewing direct to Anthropic."
+            elif { [ "$CODE" = "401" ] || [ "$CODE" = "403" ]; } && grep -qiE '"auth_error"|Authentication Error|litellm' "$BODY" 2>/dev/null; then
+              echo "::notice title=LiteLLM key rejected::LiteLLM refused LITELLM_CI_KEY (HTTP $CODE) — reviewing direct to Anthropic."
             else
-              echo "::notice title=LiteLLM gateway unreachable::LITELLM_CI_BASE_URL did not answer — reviewing direct to Anthropic."
+              echo "gateway=true" >> "$GITHUB_OUTPUT"
+              ROUTED=true
             fi
           fi
 
           if [ "$HAS_LENS" = "true" ]; then
-            if reachable "${OTLP_ENDPOINT%/}/v1/traces"; then
+            CODE=$(probe "${OTLP_ENDPOINT%/}/v1/traces")
+            CODE=${CODE:-000}
+            if [ "$CODE" != "000" ] && [ "$CODE" -lt 500 ]; then
               echo "telemetry=true" >> "$GITHUB_OUTPUT"
+              ROUTED=true
               # OTEL_RESOURCE_ATTRIBUTES is comma-separated key=value; percent-
               # encode every value so a stray comma/space can't corrupt it.
               enc() { jq -rn --arg v "$1" '$v|@uri'; }
@@ -536,9 +554,14 @@ jobs:
                 OTEL_LOG_TOOL_CONTENT: "1"
               }}')" >> "$GITHUB_OUTPUT"
             else
-              echo "::notice title=Lens unreachable::LENS_CI_OTLP_ENDPOINT did not answer — no telemetry for this review."
+              echo "::notice title=Lens unreachable::LENS_CI_OTLP_ENDPOINT did not answer (HTTP $CODE) — no telemetry for this review."
             fi
           fi
+          rm -f "$BODY"
+
+          # Nothing routed → leave the tailnet now so its DNS/routes can't
+          # affect the direct-to-Anthropic review.
+          if [ "$ROUTED" != "true" ]; then sudo tailscale down 2>/dev/null || true; fi
 
       - name: Run Claude PR review
         id: claude
