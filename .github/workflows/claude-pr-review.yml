@@ -35,6 +35,8 @@
 #       secrets:
 #         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
 #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}             # fallback (metered API)
+#         LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}     # optional: LiteLLM gateway
+#         LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }} # optional: Lens telemetry
 #       with:
 #         focus: |
 #           - Path traversal in the /raw and .md handlers.
@@ -45,6 +47,12 @@
 # system libraries. A repo whose test command links against one sees the agent
 # report a build failure that is an environment gap, not a finding about the
 # diff — install it here and the review is about the code again.
+#
+# Optional LiteLLM gateway + Lens telemetry: with the caller-repo variables
+# TS_OAUTH_CLIENT_ID / TS_AUDIENCE / LITELLM_CI_BASE_URL / LENS_CI_OTLP_ENDPOINT
+# and the two optional secrets above, the review joins the tailnet, routes model
+# calls through LiteLLM and exports OTel traces + logs to Lens. Best-effort:
+# anything missing or unreachable falls back to direct Anthropic, no telemetry.
 name: PR Review
 
 run-name: "Review PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
@@ -153,6 +161,22 @@ on:
           Anthropic API key for the review run. Fallback, used only when
           CLAUDE_CODE_OAUTH_TOKEN is absent. At least one of the two secrets
           must be provided (checked at runtime).
+        required: false
+      LITELLM_CI_KEY:
+        description: >-
+          Optional LiteLLM virtual key. With the caller-repo variables
+          TS_OAUTH_CLIENT_ID, TS_AUDIENCE and LITELLM_CI_BASE_URL set, the
+          review's model calls route through the LiteLLM `/anthropic`
+          pass-through over the tailnet. Sent ONLY as the `x-litellm-api-key`
+          header — the Anthropic credential above still passes through
+          untouched. Absent → direct to Anthropic.
+        required: false
+      LENS_TRACING_KEY:
+        description: >-
+          Optional LiteLLM Lens upload-only tracing key. With the caller-repo
+          variables TS_OAUTH_CLIENT_ID, TS_AUDIENCE and LENS_CI_OTLP_ENDPOINT
+          set, Claude Code exports OTel traces + logs (full prompt/response/tool
+          content) to Lens over the tailnet. Absent → no telemetry.
         required: false
 
 concurrency:
@@ -414,11 +438,133 @@ jobs:
           [ -z "$PRIOR" ] && PRIOR="(none — this is the first review of this PR)"
           printf '%s' "$PRIOR" | emit prior
 
+      # LiteLLM gateway + Lens telemetry — best-effort, on whenever the caller
+      # repo carries the config (vars TS_OAUTH_CLIENT_ID / TS_AUDIENCE /
+      # LITELLM_CI_BASE_URL / LENS_CI_OTLP_ENDPOINT, secrets LITELLM_CI_KEY /
+      # LENS_TRACING_KEY). None of it may break a review: missing config skips
+      # silently (forks, repos not opted in), and a failed tailnet join or an
+      # unreachable endpoint falls back to direct Anthropic / no telemetry with
+      # a ::notice::. The gateway and telemetry halves gate independently.
+      - name: Detect LiteLLM gateway / Lens telemetry config
+        id: llm
+        if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
+        env:
+          HAS_TS: ${{ vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' }}
+          HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
+          HAS_LENS: ${{ vars.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
+        run: |
+          if [ "$HAS_TS" = "true" ] && { [ "$HAS_GATEWAY" = "true" ] || [ "$HAS_LENS" = "true" ]; }; then
+            echo "join=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "join=false" >> "$GITHUB_OUTPUT"
+            echo "LiteLLM gateway / Lens telemetry not configured — reviewing direct to Anthropic, no telemetry."
+          fi
+
+      # Must run in THIS file: the Tailscale federated identity trusts the OIDC
+      # claim job_workflow_ref = jedwards1230/release-workflows/.github/workflows/*,
+      # so a caller's own workflow (or a composite action) can't join. No stored
+      # Tailscale secret — GitHub OIDC (id-token: write) is the credential.
+      - name: Join tailnet (LiteLLM gateway / Lens)
+        id: tailnet
+        if: ${{ steps.llm.outputs.join == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci-llm
+          timeout: 1m
+          retry: 2
+
+      # Probe each endpoint with a short timeout and only route to what
+      # answers. Any HTTP status below 500 counts as reachable (the unauth'd
+      # GET is expected to 401/404/405); no answer or a 5xx falls back.
+      - name: Probe LiteLLM gateway / Lens endpoints
+        id: route
+        if: ${{ steps.llm.outputs.join == 'true' }}
+        env:
+          JOINED: ${{ steps.tailnet.outcome == 'success' }}
+          HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
+          HAS_LENS: ${{ vars.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
+          BASE_URL: ${{ vars.LITELLM_CI_BASE_URL }}
+          OTLP_ENDPOINT: ${{ vars.LENS_CI_OTLP_ENDPOINT }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          if [ "$JOINED" != "true" ]; then
+            echo "::notice title=LiteLLM/Lens skipped::Tailnet join failed — reviewing direct to Anthropic, no telemetry."
+            exit 0
+          fi
+
+          # gateway/telemetry outputs are written only on success; unset = off.
+          reachable() {
+            local code
+            code=$(curl -sS -o /dev/null -m 10 -w '%{http_code}' "$1" 2>/dev/null) || true
+            [ -n "$code" ] && [ "$code" != "000" ] && [ "$code" -lt 500 ]
+          }
+
+          if [ "$HAS_GATEWAY" = "true" ]; then
+            if reachable "$BASE_URL"; then
+              echo "gateway=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice title=LiteLLM gateway unreachable::LITELLM_CI_BASE_URL did not answer — reviewing direct to Anthropic."
+            fi
+          fi
+
+          if [ "$HAS_LENS" = "true" ]; then
+            if reachable "${OTLP_ENDPOINT%/}/v1/traces"; then
+              echo "telemetry=true" >> "$GITHUB_OUTPUT"
+              # OTEL_RESOURCE_ATTRIBUTES is comma-separated key=value; percent-
+              # encode every value so a stray comma/space can't corrupt it.
+              enc() { jq -rn --arg v "$1" '$v|@uri'; }
+              echo "resource_attributes=gen_ai.agent.name=claude-pr-review,vcs.owner.name=$(enc "${REPO%%/*}"),vcs.repository.name=$(enc "${REPO#*/}"),vcs.change.id=$(enc "$PR_NUMBER"),cicd.pipeline.run.id=$(enc "$RUN_ID"),cicd.pipeline.run.attempt=$(enc "$RUN_ATTEMPT")" >> "$GITHUB_OUTPUT"
+              # Telemetry vars claude-code-action does NOT forward from step
+              # env go through its `settings` input instead (merged into
+              # ~/.claude/settings.json; user-level env is honored for these).
+              # No secrets here — the bearer key stays in step env below.
+              echo "settings=$(jq -nc '{env: {
+                CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+                OTEL_TRACES_EXPORTER: "otlp",
+                OTEL_TRACES_EXPORT_INTERVAL: "1000",
+                OTEL_LOG_USER_PROMPTS: "1",
+                OTEL_LOG_ASSISTANT_RESPONSES: "1",
+                OTEL_LOG_TOOL_DETAILS: "1",
+                OTEL_LOG_TOOL_CONTENT: "1"
+              }}')" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice title=Lens unreachable::LENS_CI_OTLP_ENDPOINT did not answer — no telemetry for this review."
+            fi
+          fi
+
       - name: Run Claude PR review
         id: claude
         if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
         uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590 # v1.0.230
+        # Gateway + telemetry env. claude-code-action forwards only an allowlist
+        # of env names to Claude (its action.yml re-declares them), so these are
+        # exactly the allowlisted ones; the rest ride the `settings` input. Each
+        # is empty unless the probe step routed to it — the same empty values
+        # the action passes today, which Claude Code treats as unset. Secrets
+        # stay in `secrets.*` expressions so the runner masks them.
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.route.outputs.gateway == 'true' && vars.LITELLM_CI_BASE_URL || '' }}
+          ANTHROPIC_CUSTOM_HEADERS: "${{ steps.route.outputs.gateway == 'true' && format('x-litellm-api-key: Bearer {0}', secrets.LITELLM_CI_KEY) || '' }}"
+          CLAUDE_CODE_ENABLE_TELEMETRY: ${{ steps.route.outputs.telemetry == 'true' && '1' || '' }}
+          OTEL_METRICS_EXPORTER: ${{ steps.route.outputs.telemetry == 'true' && 'none' || '' }}
+          OTEL_LOGS_EXPORTER: ${{ steps.route.outputs.telemetry == 'true' && 'otlp' || '' }}
+          OTEL_EXPORTER_OTLP_PROTOCOL: ${{ steps.route.outputs.telemetry == 'true' && 'http/protobuf' || '' }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ steps.route.outputs.telemetry == 'true' && vars.LENS_CI_OTLP_ENDPOINT || '' }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ steps.route.outputs.telemetry == 'true' && format('Authorization=Bearer {0}', secrets.LENS_TRACING_KEY) || '' }}
+          # Short runs: export every second rather than every 5s so little is
+          # left to the exit-time flush.
+          OTEL_LOGS_EXPORT_INTERVAL: ${{ steps.route.outputs.telemetry == 'true' && '1000' || '' }}
+          OTEL_RESOURCE_ATTRIBUTES: ${{ steps.route.outputs.resource_attributes }}
         with:
+          settings: ${{ steps.route.outputs.settings }}
           # Prefer the subscription OAuth token; fall back to the metered API
           # key only when no OAuth token was passed. Exactly one is ever set —
           # claude-code-action does not arbitrate between the two, so the
@@ -700,6 +846,7 @@ jobs:
             echo "**PR:** #${{ github.event.pull_request.number }} — ${PR_TITLE}"
             echo "**Plugins:** review-team@jedwards1230-plugins${{ inputs.extra_plugins && ' (+ extras)' || '' }}"
             echo "**Session:** \`${{ steps.claude.outputs.session_id }}\`"
+            echo "**Model route:** ${{ steps.route.outputs.gateway == 'true' && 'LiteLLM gateway' || 'direct Anthropic' }} · **Telemetry:** ${{ steps.route.outputs.telemetry == 'true' && 'Lens (traces + logs)' || 'off' }}"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
           if [ -f "$EXEC_FILE" ]; then
