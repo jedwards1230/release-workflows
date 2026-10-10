@@ -200,6 +200,67 @@ reserved for the unexpected workflow-validation skip).
 |---|---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | one of the two | **Preferred.** Claude subscription OAuth token (`claude setup-token`, Pro/Max/Team plan) — reviews bill to the subscription instead of the metered API. ~1-year lifetime, **no auto-refresh**: a 401-failed review usually means it expired (regenerate + update the secret). |
 | `ANTHROPIC_API_KEY` | one of the two | Fallback, used only when the OAuth token is absent (metered pay-per-token billing). |
+| `LITELLM_CI_KEY` | no | LiteLLM virtual key — enables the gateway route below. |
+| `LENS_TRACING_KEY` | no | LiteLLM Lens upload-only tracing key — enables telemetry below. |
+
+**LiteLLM gateway + Lens telemetry (optional, best-effort).** On by default
+whenever the caller repo carries the config; otherwise skipped silently (forks,
+repos not opted in, callers outside the `jedwards1230` owner). The workflow joins a Tailscale tailnet via GitHub OIDC
+workload identity (`tailscale/github-action`, `tags: tag:ci-llm`, no stored
+Tailscale secret), probes each endpoint with a 10s timeout (the gateway probe
+also presents the LiteLLM key), and:
+
+- **Gateway** (`LITELLM_CI_BASE_URL` + `LITELLM_CI_KEY`): routes the review's
+  model calls through the LiteLLM `/anthropic` pass-through
+  (`ANTHROPIC_BASE_URL`). The caller's own Anthropic credential passes through
+  untouched; the LiteLLM key goes only in an `x-litellm-api-key: Bearer …`
+  header (`ANTHROPIC_CUSTOM_HEADERS`).
+- **Telemetry** (`LENS_CI_OTLP_ENDPOINT` + `LENS_TRACING_KEY`): Claude Code
+  exports OTel **traces + logs with full content** (prompts, assistant
+  responses, tool input/output) over OTLP `http/protobuf` to
+  `<endpoint>/v1/traces` and `/v1/logs`, bearer-authenticated; metrics off.
+  Resource attributes: `gen_ai.agent.name=claude-pr-review`, `vcs.owner.name`,
+  `vcs.repository.name`, `vcs.change.id` (PR number),
+  `cicd.pipeline.run.id`/`.attempt`.
+
+The two halves gate independently. A failed tailnet join, an endpoint that
+doesn't answer at the start of the run (no response or 5xx), or LiteLLM
+rejecting the key falls back to direct Anthropic / no telemetry with a
+`::notice::`, and the review still runs. If nothing routes, the runner leaves
+the tailnet before the review. A gateway that fails *mid-review* still fails
+the run, and that surfaces as the usual red `is_error` check. The job summary
+records which route each review took. claude-code-action forwards only an
+allowlist of env names to Claude, so the allowlisted ones (base URL, headers,
+the common `OTEL_*`) are set as step env and the rest (traces exporter, content
+flags, enhanced-telemetry beta) go through the action's `settings` input; no
+secret is in the settings JSON.
+
+The tailnet join **must** stay in this reusable file. The Tailscale federated
+identity trusts only OIDC tokens with `sub = repo:jedwards1230/*` (the caller
+repo) **and** `job_workflow_ref = jedwards1230/release-workflows/.github/workflows/*`.
+So a caller's own workflow (or a composite action) cannot join, and neither can
+a third-party repo calling this reusable. Callers reach the gateway only through
+a release-workflows reusable.
+
+Two things to know before opting a repo in:
+
+- **The model credential transits LiteLLM.** The caller's
+  `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` is forwarded through the
+  pass-through. LiteLLM's logging must not record forwarded auth headers.
+- **The vars show up in Actions logs.** `vars.*` are not masked, so a public
+  caller repo's logs show the tailnet hostnames and the Tailscale client ID and
+  audience. None of them is usable without a matching OIDC token or tailnet
+  membership. The two keys are secrets and stay masked.
+
+| Caller repo variable (`vars.*`) | Notes |
+|---|---|
+| `TS_OAUTH_CLIENT_ID` | Tailscale federated-identity client ID (required for either half) |
+| `TS_AUDIENCE` | Tailscale federated-identity audience (required for either half) |
+| `LITELLM_CI_BASE_URL` | LiteLLM `/anthropic` pass-through URL on the tailnet, e.g. `https://<host>.<tailnet>.ts.net/anthropic` |
+| `LENS_CI_OTLP_ENDPOINT` | Lens OTLP ingest base URL (no `/v1/...` suffix), e.g. `https://<host>.<tailnet>.ts.net/lens-ingest` |
+
+Variables resolve from the calling repo. The two secrets must be passed
+explicitly (or via `secrets: inherit`) like the Anthropic ones.
 
 **Optional inputs:**
 
@@ -235,6 +296,8 @@ jobs:
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # fallback (metered API)
+      LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }} # optional: LiteLLM gateway
+      LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }} # optional: Lens telemetry
 ```
 
 ---
