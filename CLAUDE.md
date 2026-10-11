@@ -375,10 +375,14 @@ Current stable: `@v1` (v1.x.x line). `@v0` is frozen.
 - Chart bumps go into the tagged commit only — never pushed back to `main`.
 - Minor/major releases use a **cumulative diff** from the previous `X.Y.0` /
   `X.0.0` baseline so AI notes summarize the full release arc.
-- Diff sent to the AI is scoped to files touched by merge commits; direct
-  pushes to `main` are excluded. On squash-merge repos (no merge commits in the
-  range) it falls back to first-parent non-merge commits, so squashed PRs still
-  get AI notes — the AI step only truly skips when the range is genuinely empty.
+- Commits and diff sent to the AI come from the release branch's mainline
+  (`git log --first-parent`): one entry per PR whether it landed as a merge
+  commit or a squash, and nothing from inside feature branches. Direct pushes
+  to `main` are included. The job log prints commit, file and diff-byte counts,
+  then `Response model:` (the model the API reports, not the requested alias)
+  and token counts.
+- The notes prompt states the bump type and forbids claims the input doesn't
+  support, including a Breaking Changes section without a visible break.
 - Model selection: Haiku for patch (fast/cheap), Sonnet for minor/major. Both
   use undated model IDs (`claude-haiku-5-5`, `claude-sonnet-4-6`) to match the
   PR-review default; Sonnet's is a **floating alias**, while Haiku 5.5's ID is
