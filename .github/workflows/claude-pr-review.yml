@@ -888,10 +888,10 @@ jobs:
           # concurrency group, or by claude-pr-review-cancel.yml on merge/close)
           # leaves track_progress's checklist comment looking like a review in
           # progress forever. Rewrite it. Only claude[bot] comments created
-          # after this run's review step started and never finalized qualify:
-          # the concurrency group means no other review run on this PR overlaps
-          # that window, and a body linking a different run is skipped. Never
-          # fails the job.
+          # after this run's review step started and never finalized qualify.
+          # A superseding run's placeholder can land inside this window, so the
+          # body-link check below keeps it from being rewritten (the action's
+          # placeholder links its own run). Never fails the job.
           set +e
           RUN_URL="$GITHUB_SERVER_URL/$REPO/actions/runs/$RUN_ID"
           IDS=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments?since=$STARTED_AT" --paginate \
