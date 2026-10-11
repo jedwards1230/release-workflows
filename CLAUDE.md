@@ -327,9 +327,10 @@ comment to a one-line "Review cancelled" note in a `cancelled()` step of
 `claude-pr-review.yml`, so the PR is not left showing a review in progress.
 claude-code-action exposes no comment id, so the step matches `claude[bot]`
 comments created after its review step started that never reached the
-"Claude finished" / "encountered an error" state. It needs no permission beyond
-the review's existing `pull-requests: write`; this canceller stays `actions:
-write` only.
+"Claude finished" / "encountered an error" state. It uses the review's existing
+`pull-requests: write` token (expected to suffice for editing another author's
+PR comment, not yet confirmed by a live run; a refused PATCH only logs `WARN`).
+This canceller stays `actions: write` only.
 
 **Required permissions on the calling job:** `actions: write`
 
