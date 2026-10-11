@@ -516,14 +516,33 @@ jobs:
             curl -sS -o "$BODY" -m 10 -w '%{http_code}' "$@" "$url" 2>/dev/null || true
           }
 
+          # LiteLLM's own key rejections carry `{"error":{"type":…,"message":…}}`
+          # with a ProxyErrorTypes value (auth_error, token_not_found_in_db,
+          # expired_key, budget_exceeded, *_model_access_denied) or an
+          # "Authentication Error…" message. Match ONLY those: other 401s — e.g.
+          # the pass-through's "No Anthropic credential is configured…" reply
+          # to a valid key with no upstream credential, which is exactly what
+          # this probe sends — mean the gateway accepted the key.
+          key_rejected() {
+            case "$1" in 401|403|429) ;; *) return 1 ;; esac
+            REJECT_TYPE=$(jq -r '.error.type // empty' "$BODY" 2>/dev/null)
+            local msg
+            msg=$(jq -r '.error.message // empty' "$BODY" 2>/dev/null)
+            case "$REJECT_TYPE" in
+              auth_error|token_not_found_in_db|expired_key|budget_exceeded|*_model_access_denied) return 0 ;;
+            esac
+            case "$msg" in "Authentication Error"*) REJECT_TYPE=${REJECT_TYPE:-auth}; return 0 ;; esac
+            return 1
+          }
+
           if [ "$HAS_GATEWAY" = "true" ]; then
             # Header via stdin (-H @-) so the key never lands on the curl argv.
             CODE=$(printf 'x-litellm-api-key: Bearer %s\n' "$LITELLM_CI_KEY" | probe "${BASE_URL%/}/v1/models" -H @-)
             CODE=${CODE:-000}
             if [ "$CODE" = "000" ] || [ "$CODE" -ge 500 ]; then
               echo "::notice title=LiteLLM gateway unreachable::LITELLM_CI_BASE_URL did not answer (HTTP $CODE) — reviewing direct to Anthropic."
-            elif { [ "$CODE" = "401" ] || [ "$CODE" = "403" ]; } && grep -qiE '"auth_error"|Authentication Error|litellm' "$BODY" 2>/dev/null; then
-              echo "::notice title=LiteLLM key rejected::LiteLLM refused LITELLM_CI_KEY (HTTP $CODE) — reviewing direct to Anthropic."
+            elif key_rejected "$CODE"; then
+              echo "::notice title=LiteLLM key rejected::LiteLLM refused LITELLM_CI_KEY (HTTP $CODE, $REJECT_TYPE) — reviewing direct to Anthropic."
             else
               echo "gateway=true" >> "$GITHUB_OUTPUT"
               ROUTED=true
