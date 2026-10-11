@@ -11,9 +11,9 @@
 # what it needs.
 #
 # Review depth is skill-first: the agent is prompted to load installed
-# knowledge skills (e.g. a language-quality plugin's review checklist) and
-# review inline by default, escalating to specialist agents only for large or
-# high-stakes diffs. Callers whose repos have a matching quality plugin should
+# knowledge skills (e.g. a language-quality plugin's review checklist) for the
+# parts of the diff they cover, and to delegate each part no domain skill
+# covers to a specialist agent (plus large or high-stakes diffs). Callers whose repos have a matching quality plugin should
 # pass it via `extra_plugins` (e.g. `go-quality@jedwards1230-plugins`) so the
 # skill — and its skill-preloaded reviewer agent — are available at review time.
 #
@@ -689,7 +689,7 @@ jobs:
 
             Uncovered parts: delegate each part with no matching domain skill to
             the best-fitting agent, even on a small diff and even when another
-            part is covered. Without a skill you are reviewing from general
+            part is covered (except the trivial class below). Without a skill you are reviewing from general
             knowledge, and the failure mode is not silence: it is a confident,
             specific, wrong claim about an API you half-know. If no agent fits
             either, say in the finding that you could not verify it.
