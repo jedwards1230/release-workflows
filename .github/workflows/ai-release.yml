@@ -421,7 +421,7 @@ jobs:
             diff is absent or truncated, describe only what the titles say.
           - Include a Breaking Changes section only when the input shows a
             breaking change (a removed or renamed input/flag/API, changed
-            defaults, or a commit marked "!" / "BREAKING CHANGE"). A dependency
+            defaults, or a commit subject marked "!"). A dependency
             bump is not breaking unless the diff shows code adapting to a break.
           - If you name the kind of release, call it a ${BUMP_TYPE} release.
 
