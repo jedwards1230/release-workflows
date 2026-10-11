@@ -706,9 +706,10 @@ jobs:
             the relevant file paths or hunks, and the specific concern. Fold
             their findings into your own verdict; you own the final review.
 
-            Skip both only for the trivial class (pure docs, comments, config
-            values, or a dependency bump with no logic change) and review those
-            directly.
+            Skip both only for the trivial class (pure docs, comments, plain
+            config-value edits such as a changed default or version pin, or a
+            dependency bump with no logic change) and review those directly.
+            Permissions, secrets, auth, and conditions are never trivial.
 
             The ### Focus section below may add repo-specific guidance or name
             particular agents to prioritize; treat it as an extension of these

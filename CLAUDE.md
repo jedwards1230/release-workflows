@@ -145,8 +145,9 @@ parts are delegated too for large diffs (~300+ changed lines), several
 dimensions needing real scrutiny, or high-stakes surfaces
 (security/auth/data-integrity/destructive infra). Capped at 3 agents,
 preferring a skill-preloaded language-quality reviewer over a generic one.
-Only the trivial class (docs, comments, config values, dependency bumps) skips
-both. Repos with a matching quality plugin should pass it via `extra_plugins`
+Only the trivial class (docs, comments, plain config-value edits, dependency
+bumps) skips both; permissions, secrets, auth and conditions never count as
+trivial. Repos with a matching quality plugin should pass it via `extra_plugins`
 (e.g. `go-quality@jedwards1230-plugins`) so both the skill and its reviewer
 agent are available at review time.
 
