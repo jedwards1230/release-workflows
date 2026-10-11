@@ -12,6 +12,10 @@
 #   workflow_call), so the `closed` trigger must live in the caller. This reusable
 #   holds the cancel LOGIC; the caller adds a tiny `closed`-gated job that calls it.
 #
+#   A cancelled review rewrites its own unfinished progress comment in a
+#   cancelled() step of claude-pr-review.yml, so this job needs only
+#   actions: write.
+#
 # Usage (caller):
 #   on:
 #     pull_request:

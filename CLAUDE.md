@@ -132,19 +132,24 @@ one verdict line is a good review. One grab-bag block defeats the purpose: the
 same mistake as leaving it in prose, since both are invisible to the merge
 gate.
 
-**Skill-first review depth.** The agent decides per diff how deep to go, biased
-toward the cheap path: by default it loads any installed knowledge skills that
-cover the diff (e.g. a language-quality plugin's review checklist) and reviews
-inline itself; it escalates to specialist agents (Task tool) for large diffs
-(~300+ changed lines), several dimensions needing real scrutiny, high-stakes
-surfaces (security/auth/data-integrity/destructive infra), **or a diff turning
-on domain knowledge no loaded skill covers** — capped at 3 agents, preferring a
-skill-preloaded language-quality reviewer over a generic one. That last trigger
-is the one most often missed: with no matching skill the reviewer is working
-from general knowledge, and the failure mode is a confident wrong claim about a
-half-known API, not silence. Repos with a matching quality plugin should pass
-it via `extra_plugins` (e.g. `go-quality@jedwards1230-plugins`) so both the
-skill and its reviewer agent are available at review time.
+**Skill-first review depth, per part of the diff.** The agent first lists the
+skills and agents available to it and splits the diff by language/domain.
+Parts a domain skill covers (e.g. a language-quality plugin's review
+checklist) it reviews inline with that skill loaded. Parts **no** domain skill
+covers it delegates to the best-fitting agent (Task tool), even on a small diff
+and even when another part is covered: with no matching skill the reviewer
+works from general knowledge, and the failure mode is a confident wrong claim
+about a half-known API, not silence. The always-installed generic
+`review-team:review-team` skill does not count as domain coverage. Covered
+parts are delegated too for large diffs (~300+ changed lines), several
+dimensions needing real scrutiny, or high-stakes surfaces
+(security/auth/data-integrity/destructive infra). Capped at 3 agents,
+preferring a skill-preloaded language-quality reviewer over a generic one.
+Only the trivial class (docs, comments, plain config-value edits, dependency
+bumps) skips both; permissions, secrets, auth and conditions never count as
+trivial. Repos with a matching quality plugin should pass it via `extra_plugins`
+(e.g. `go-quality@jedwards1230-plugins`) so both the skill and its reviewer
+agent are available at review time.
 
 The verdict is delivered by `track_progress`'s live comment. As a safety net, a
 final `Ensure review verdict reached the PR` step posts the agent's result text
@@ -316,6 +321,17 @@ A reusable workflow cannot self-trigger on `closed` (it only runs via
 `workflow_call`), so the `closed` trigger lives in the **caller**; this reusable
 holds the cancel logic. It finds in-progress/queued runs of the review workflow
 for the PR's head branch and cancels them (excluding its own run).
+
+A cancelled review (from this workflow, or superseded by a re-push through the
+concurrency group) rewrites its own unfinished `track_progress` checklist
+comment to a one-line "Review cancelled" note in a `cancelled()` step of
+`claude-pr-review.yml`, so the PR is not left showing a review in progress.
+claude-code-action exposes no comment id, so the step matches `claude[bot]`
+comments created after its review step started that never reached the
+"Claude finished" / "encountered an error" state. It uses the review's existing
+`pull-requests: write` token (expected to suffice for editing another author's
+PR comment, not yet confirmed by a live run; a refused PATCH only logs `WARN`).
+This canceller stays `actions: write` only.
 
 **Required permissions on the calling job:** `actions: write`
 
