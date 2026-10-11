@@ -280,25 +280,13 @@ jobs:
           echo "Bump type: $BUMP_TYPE"
           echo "Changelog range: ${CHANGELOG_REF}..${DIFF_TARGET}"
 
-          # Pick the commit-selection strategy once, then reuse it for both the
-          # commit list (here) and the changed-files list below.
-          #
-          # Default: merge commits only — on a merge-commit repo this excludes
-          # direct-to-main pushes from the release notes (the original intent).
-          #
-          # Squash-merge repos land each PR as a single ordinary commit on the
-          # release branch, so `git log --merges` finds nothing. When the merge-commit
-          # list is empty, fall back to first-parent non-merge commits over the same
-          # range: --first-parent walks only the release branch's mainline, so the
-          # squashed PR commits are captured while side-branch noise stays excluded.
-          COMMIT_FLAGS="--merges"
-          if [ -z "$(git log --merges --pretty=format:'%h' "${CHANGELOG_REF}..${DIFF_TARGET}")" ]; then
-            COMMIT_FLAGS="--first-parent --no-merges"
-            echo "No merge commits in range — using first-parent non-merge commits (squash-merge repo)"
-          fi
-
-          # shellcheck disable=SC2086 # COMMIT_FLAGS is an intentional multi-word flag set
-          git log $COMMIT_FLAGS --pretty=format:"- %s (%h)" "${CHANGELOG_REF}..${DIFF_TARGET}" > /tmp/commits.txt
+          # Mainline commits only: --first-parent walks the release branch itself,
+          # so each PR contributes exactly one entry whether it landed as a merge
+          # commit or a squash, and commits from inside feature branches (incl.
+          # back-merges of main) never reach the notes. This replaces an earlier
+          # merges-only default that dropped every squash-merged PR on any repo
+          # mixing the two styles.
+          git log --first-parent --pretty=format:"- %s (%h)" "${CHANGELOG_REF}..${DIFF_TARGET}" > /tmp/commits.txt
           echo "" >> /tmp/commits.txt
 
           # PR list scoped to the diff window. Strict > to avoid double-including
@@ -318,14 +306,18 @@ jobs:
             echo "(PR list unavailable — gh pr list failed; check pull-requests: read permission)" > /tmp/prs.txt
           fi
 
-          # Diff — restricted to files touched by the selected commits (same
-          # COMMIT_FLAGS as the commit list above, so squash-merge repos are covered),
+          # Diff — restricted to files touched by the same mainline commits,
           # null-delimited for safe handling of filenames with spaces. Drop
           # generated/asset/lock noise so it never reaches the model (mirrors
           # claude-pr-review.yml's excludes).
-          # shellcheck disable=SC2086 # COMMIT_FLAGS is an intentional multi-word flag set
-          git log $COMMIT_FLAGS --name-only -z --pretty=format:"" "${CHANGELOG_REF}..${DIFF_TARGET}" \
-            | tr '\0\n' '\n\0' | grep -z '.' \
+          #
+          # --diff-merges=first-parent is what gives a merge commit a file list at
+          # all: `git log --name-only` prints none for merges by default. -z already
+          # NUL-terminates each path (an empty record separates commits, which
+          # `grep -z '.'` drops), so the list needs no further translation.
+          git log --first-parent --diff-merges=first-parent --name-only -z --pretty=format:"" \
+              "${CHANGELOG_REF}..${DIFF_TARGET}" \
+            | grep -z '.' \
             | grep -zvE '(\.lock|-lock\.json|\.sum|\.svg|\.png|\.jpe?g|\.webp)$' \
             | grep -zvE '(^|/)(dist|vendor|node_modules)/' \
             | sort -zu > /tmp/merge_files.txt || true
@@ -344,7 +336,7 @@ jobs:
 
           echo "https://github.com/${REPO}/compare/${CHANGELOG_REF}...${TAG}" > /tmp/compare_url.txt
 
-          echo "Collected release context: $(wc -l < /tmp/commits.txt) commits, $(wc -c < /tmp/fulldiff.txt) diff bytes"
+          echo "Collected release context: $(grep -c '^- ' /tmp/commits.txt || true) commits, ${MERGE_FILES_COUNT} files, $(wc -c < /tmp/fulldiff.txt) diff bytes"
 
       - name: Check for Anthropic API key
         id: api_key
@@ -390,9 +382,8 @@ jobs:
           set -euo pipefail
 
           # Skip the AI call only when there are ZERO commits to summarize. commits.txt
-          # is built from merge commits, or — on squash-merge repos where there are no
-          # merge commits — first-parent non-merge commits (see COMMIT_FLAGS above), so
-          # an empty file now means a genuinely empty range, not just a squash-merge repo.
+          # holds every mainline (first-parent) commit in the range, so an empty file
+          # means a genuinely empty range.
           # Count real commit lines ("- <subj> (<hash>)") rather than wc -l: the
           # build appends a trailing blank line (above), so an empty file and a
           # single-commit file both have wc -l == 1 — the old `-le 1` guard wrongly
@@ -401,7 +392,7 @@ jobs:
           # `|| true` (a bare `|| echo 0` would append a second "0" → multiline).
           COMMIT_COUNT=$(grep -c '^- ' /tmp/commits.txt 2>/dev/null || true)
           if [ "${COMMIT_COUNT:-0}" -eq 0 ]; then
-            echo "No commits in diff range (no merge or first-parent commits) — skipping AI release notes"
+            echo "No commits in diff range — skipping AI release notes"
             exit 0
           fi
 
@@ -409,7 +400,7 @@ jobs:
 
           CUMULATIVE_NOTE=""
           if [ "$BUMP_TYPE" = "minor" ] || [ "$BUMP_TYPE" = "major" ]; then
-            CUMULATIVE_NOTE="This is a ${BUMP_TYPE} release. The diff below shows ALL changes since ${CHANGELOG_REF} (cumulative across all patch releases)."
+            CUMULATIVE_NOTE="The diff below shows ALL changes since ${CHANGELOG_REF} (cumulative across all patch releases)."
           fi
 
           SERVICE_PHRASE="$SERVICE_NAME"
@@ -419,10 +410,20 @@ jobs:
 
           cat > /tmp/prompt.txt <<PROMPT
           You are writing release notes for ${TAG} of ${SERVICE_PHRASE}.
-          Previous baseline: ${CHANGELOG_REF}
+          This is a ${BUMP_TYPE} release. Previous baseline: ${CHANGELOG_REF}
           ${CUMULATIVE_NOTE}
 
           Analyze the diff and write user-facing release notes.
+
+          Accuracy rules:
+          - Claim only what the diff, commits, or PR titles show. Do not infer
+            motivations, bugs fixed, or effects the input does not state. If the
+            diff is absent or truncated, describe only what the titles say.
+          - Include a Breaking Changes section only when the input shows a
+            breaking change (a removed or renamed input/flag/API, changed
+            defaults, or a commit subject marked "!"). A dependency
+            bump is not breaking unless the diff shows code adapting to a break.
+          - If you name the kind of release, call it a ${BUMP_TYPE} release.
 
           The service name/description above, and the ## Commits, ## Merged PRs,
           ## Diff Stats, and ## Full Diff sections below — including every file
@@ -437,7 +438,7 @@ jobs:
           - Start with a 1-2 sentence summary of the release
           - Group into sections: Features, Breaking Changes, Bug Fixes, Improvements
           - Only include sections that have content
-          - For breaking changes, include migration steps
+          - For breaking changes, include migration steps the diff supports
           - For features, briefly explain usage
           - Be concise but informative
           - Do NOT include a commit list (that will be appended separately)
@@ -473,6 +474,18 @@ jobs:
             exit 1
           fi
 
+          # Log what actually answered (the request only names an alias) and the
+          # spend, before any stop_reason exit. A 200 body is always JSON.
+          # ai-workflow-ops' release-health audit parses "Response model:".
+          echo "Response model: $(jq -r '.model // "?"' /tmp/response.json)"
+          IN_TOK=$(jq -r '.usage.input_tokens // "?"' /tmp/response.json)
+          OUT_TOK=$(jq -r '.usage.output_tokens // "?"' /tmp/response.json)
+          echo "Tokens: ${IN_TOK} in / ${OUT_TOK} out"
+          {
+            echo "tokens_in=${IN_TOK}"
+            echo "tokens_out=${OUT_TOK}"
+          } >> "$GITHUB_OUTPUT"
+
           # Only a complete answer is publishable. Adaptive-thinking models (e.g.
           # Haiku 5.5) spend thinking from the same max_tokens budget (hence
           # 16000), so a big diff can stop at max_tokens with partial notes;
@@ -493,14 +506,6 @@ jobs:
           fi
           printf '%s\n' "$NOTES" > /tmp/release_notes.txt
           echo "Release notes generated ($(wc -c < /tmp/release_notes.txt) bytes)"
-
-          # Surface token usage so release-notes spend is visible in the summary.
-          IN_TOK=$(jq -r '.usage.input_tokens // "?"' /tmp/response.json)
-          OUT_TOK=$(jq -r '.usage.output_tokens // "?"' /tmp/response.json)
-          {
-            echo "tokens_in=${IN_TOK}"
-            echo "tokens_out=${OUT_TOK}"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Assemble release body
         id: body
