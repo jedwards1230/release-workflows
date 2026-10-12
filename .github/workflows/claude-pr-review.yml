@@ -84,7 +84,7 @@ on:
         type: string
         default: ""
       extra_allowed_tools:
-        description: "Comma-separated extra allowedTools, appended to the default read-only review toolset. The fixed deny floor (see the compose step) wins over these in every permission mode; an entry it overrides draws a warning annotation."
+        description: "Comma-separated extra allowedTools, appended to the default read-only review toolset. The fixed deny floor (see the compose step) wins over these in every permission mode; an entry it fully or partly overrides (e.g. `Edit(src/*)`, `Bash(gh:*)`) draws a warning annotation."
         required: false
         type: string
         default: ""
@@ -366,10 +366,29 @@ jobs:
             IFS=',' read -ra denies <<< "$DENY_TOOLS"
             for extra in "${extras[@]}"; do
               extra="${extra#"${extra%%[![:space:]]*}"}"; extra="${extra%"${extra##*[![:space:]]}"}"
+              [ -n "$extra" ] || continue
+              # Inner command of a Bash(...) entry, minus a trailing ":*" or "*".
+              inner=""
+              if [[ "$extra" == "Bash("*")" ]]; then inner="${extra#Bash(}"; inner="${inner%)}"; inner="${inner%:\*}"; inner="${inner%\*}"; inner="${inner% }"; fi
               for deny in "${denies[@]}"; do
-                prefix="${deny%:\*)}"
-                if [ "$extra" = "$deny" ] || { [ "$prefix" != "$deny" ] && [[ "$extra" == "$prefix"[:\ \)]* ]]; }; then
-                  echo "::warning title=extra_allowed_tools overridden::'$extra' matches the deny floor rule '$deny' and will be denied in every permission mode."
+                hit=""
+                if [[ "$deny" != *"("* ]]; then
+                  # Bare deny (Edit, WebFetch, ...): covers every specifier form.
+                  if [ "$extra" = "$deny" ] || [[ "$extra" == "$deny("* ]]; then hit="denied"; fi
+                else
+                  cmd="${deny#Bash(}"; cmd="${cmd%:\*)}"
+                  if [ "$extra" = "Bash" ] || [ "$extra" = "Bash(*)" ]; then
+                    hit="partly denied"
+                  elif [ -n "$inner" ] || [[ "$extra" == "Bash("* ]]; then
+                    if [ "$inner" = "$cmd" ] || [[ "$inner" == "$cmd"[:\ ]* ]]; then
+                      hit="denied"
+                    elif [ -n "$inner" ] && [[ "$cmd" == "$inner "* ]]; then
+                      hit="partly denied"
+                    fi
+                  fi
+                fi
+                if [ -n "$hit" ]; then
+                  echo "::warning title=extra_allowed_tools overridden::'$extra' is $hit by the deny floor rule '$deny' in every permission mode."
                   break
                 fi
               done

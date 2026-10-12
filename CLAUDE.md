@@ -274,7 +274,7 @@ explicitly (or via `secrets: inherit`) like the Anthropic ones.
 | `focus` | `""` | Repo-specific guidance appended under `### Focus` |
 | `extra_plugins` | `""` | Newline-separated `name@marketplace` entries. Recommended: the repo's language-quality plugin(s), e.g. `go-quality@jedwards1230-plugins` |
 | `extra_plugin_marketplaces` | `""` | Newline-separated marketplace git URLs |
-| `extra_allowed_tools` | `""` | Comma-separated extra tools appended to the default set. The `permission_mode` deny floor wins over these in every mode; an overridden entry draws a warning annotation |
+| `extra_allowed_tools` | `""` | Comma-separated extra tools appended to the default set. The `permission_mode` deny floor wins over these in every mode; an entry it fully or partly overrides (e.g. `Edit(src/*)`, `Bash(gh:*)`) draws a warning annotation |
 | `model` | `claude-haiku-5-5` | Model override |
 | `max_turns` | `50` | Max agent turns |
 | `permission_mode` | `""` | `""` = allowlist only (other tool calls silently denied). `auto` = Claude Code auto mode: non-allowlisted calls go to the safety classifier (extra model call, default Sonnet 5 — must be routable through LiteLLM) instead of being denied, so the agent can run read-only verification. A fixed deny list (Edit/Write, push/commit, `gh pr merge/close/review`, `gh api`, curl/wget/nc, WebFetch) applies in every mode. `bypassPermissions` is rejected. |
