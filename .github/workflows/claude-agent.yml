@@ -30,6 +30,10 @@
 #         LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}     # optional: LiteLLM gateway
 #         LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }} # optional: Lens telemetry
 #
+# No `concurrency:` here either: whether overlapping runs (e.g. two quick
+# @claude comments on one issue) should queue or cancel is the caller's call —
+# set a job-level `concurrency:` on the calling job if it matters.
+#
 # No `permissions:` block here on purpose: the job inherits the caller job's
 # token scopes, and the two use cases need different ones (triage: issues
 # write; mention bot: contents/PR/issues write). `id-token: write` is required
@@ -70,7 +74,10 @@ on:
         type: string
         default: ""
       additional_permissions:
-        description: "claude-code-action `additional_permissions` (newline-separated `scope: level`)."
+        description: >-
+          claude-code-action `additional_permissions` (newline-separated
+          `scope: level`). Applies only on the Claude App token path; with
+          `use_github_token: true` the caller job's own permissions govern.
         required: false
         type: string
         default: "actions: read"
@@ -304,10 +311,12 @@ jobs:
 
       - name: Write job summary
         if: always()
+        env:
+          AGENT_NAME: ${{ inputs.agent_name }}
         run: |
           EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
           {
-            echo "## Claude Agent (\`${{ inputs.agent_name }}\`)"
+            echo "## Claude Agent (\`${AGENT_NAME}\`)"
             echo ""
             echo "**Session:** \`${{ steps.claude.outputs.session_id }}\`"
             echo "**Model route:** ${{ steps.route.outputs.gateway == 'true' && 'LiteLLM gateway' || 'direct Anthropic' }} · **Telemetry:** ${{ steps.route.outputs.telemetry == 'true' && 'Lens (traces + logs)' || 'off' }}"

@@ -390,7 +390,8 @@ The trigger filter (`contains(..., '@claude')`) stays in the **caller's** job
 `if:` so non-matching events never start the reusable. The reusable declares no
 `permissions:` — it inherits the caller job's token, since triage and the
 mention bot need different scopes. The caller job must grant `id-token: write`
-for the tailnet join.
+for the tailnet join. There is no `concurrency:` group either; a caller that
+wants overlapping runs queued or cancelled sets one on its calling job.
 
 **Inputs (all optional):**
 
@@ -399,7 +400,7 @@ for the tailnet join.
 | `agent_name` | `claude-mention` | `gen_ai.agent.name` in Lens. One name per job type, e.g. `claude-issue-triage` |
 | `prompt` | `""` | Empty = tag mode (`@claude`); set = agent mode |
 | `claude_args` | `""` | Extra Claude Code CLI args, passed through |
-| `additional_permissions` | `actions: read` | claude-code-action `additional_permissions` |
+| `additional_permissions` | `actions: read` | claude-code-action `additional_permissions`. App-token path only; with `use_github_token: true` the caller job's permissions govern |
 | `allowed_non_write_users` | `""` | e.g. `*` for issue triage; needs `use_github_token: true` |
 | `use_github_token` | `false` | Pass `GITHUB_TOKEN` instead of the Claude App OIDC token exchange |
 | `use_commit_signing` | `true` | claude-code-action `use_commit_signing` |
