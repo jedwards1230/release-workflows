@@ -16,13 +16,15 @@ permissions:
 jobs:
   review:
     if: github.event.action != 'closed'
-    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
+    # [throwaway] live test of #63 auto mode — do not merge
+    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@fd5e98386e80e07e92ffa0dd04a2f2695c257c91
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # fallback (metered API)
       LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}
       LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }}
     with:
+      permission_mode: auto
       focus: |
         release-workflows hosts REUSABLE GitHub Actions workflows other repos pin.
         - Script injection: untrusted input (PR titles, branch names, event data)
