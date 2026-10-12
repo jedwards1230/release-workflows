@@ -43,6 +43,14 @@
 #           - html/template vs text/template misuse (XSS).
 #         system_packages: libdbus-1-dev   # apt packages the repo's build needs
 #
+# `permission_mode: auto` (opt-in, default off) runs the agent in Claude Code's
+# auto permission mode: a classifier model approves or blocks each tool call
+# outside the allowlist instead of the headless run silently denying it, so the
+# agent can run read-only verification (go vet, a linter, git log) the static
+# allowlist never anticipated. A fixed deny list (writes, pushes, merges, raw
+# network clients) applies on top in every mode. Blocked calls are denied, not
+# prompted — the run keeps going. See the input description for the tradeoff.
+#
 # `system_packages` exists because the runner image carries no repo-specific
 # system libraries. A repo whose test command links against one sees the agent
 # report a build failure that is an environment gap, not a finding about the
@@ -124,6 +132,24 @@ on:
         required: false
         type: boolean
         default: false
+      permission_mode:
+        description: >-
+          Claude Code permission mode for the review agent. Empty (default)
+          keeps today's behavior: only the allowlisted tools run and every
+          other tool call is silently denied (headless runs have no prompt).
+          `auto` turns on auto mode: allowlisted tools still run directly, and
+          anything else goes to Claude Code's safety classifier, which approves
+          routine read-only verification and blocks escalation, exfiltration,
+          and actions that look driven by the PR content. The classifier is a
+          second model call per non-allowlisted action (default Sonnet 5;
+          through the LiteLLM gateway that model must be routable or it falls
+          back to the session model). Auto mode reduces, but does not remove,
+          prompt-injection risk from PR content: the agent's environment holds
+          a pull-requests:write token and the gateway key. Only `auto` is
+          accepted; `bypassPermissions` is deliberately not offered.
+        required: false
+        type: string
+        default: ""
       system_packages:
         description: >-
           Whitespace- or newline-separated apt packages to install on the runner
@@ -280,9 +306,22 @@ jobs:
           EXTRA_MARKETPLACES: ${{ inputs.extra_plugin_marketplaces }}
           EXTRA_TOOLS: ${{ inputs.extra_allowed_tools }}
           DRAFT_ON_BLOCKING: ${{ inputs.draft_on_blocking }}
+          PERMISSION_MODE: ${{ inputs.permission_mode }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
+
+          # Permission mode: allowlist-only (empty) or auto. Anything else —
+          # notably bypassPermissions — fails the job rather than reaching
+          # claude_args.
+          case "$PERMISSION_MODE" in
+            "") echo "permission_args=" >> "$GITHUB_OUTPUT" ;;
+            auto) echo "permission_args=--permission-mode auto" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error title=Invalid permission_mode::'$PERMISSION_MODE' is not supported — use '' (allowlist only) or 'auto'."
+              exit 1
+              ;;
+          esac
 
           # Random per-run delimiter for every multi-line $GITHUB_OUTPUT block
           # below — same defense as the "ctx" step: extra_plugin_marketplaces /
@@ -319,10 +358,17 @@ jobs:
           # that leaves it off never exposes a state-changing gh command.
           if [ "$DRAFT_ON_BLOCKING" = "true" ]; then BASE_TOOLS="${BASE_TOOLS},Bash(gh pr ready:*)"; fi
           if [ -n "$EXTRA_TOOLS" ]; then BASE_TOOLS="${BASE_TOOLS},${EXTRA_TOOLS}"; fi
+          # Deny rules apply in every permission mode and are evaluated before
+          # the auto-mode classifier, so they are the hard floor under it: a
+          # reviewer never edits files, pushes, merges, or opens raw network
+          # connections, whatever a PR's content talks it into. Prefix rules
+          # are bypassable by an obfuscated command line; the classifier is the
+          # backstop for those, which is why this list is short, not exhaustive.
           {
             echo "allowed_tools<<$DELIM"
             printf '%s\n' "$BASE_TOOLS"
             echo "$DELIM"
+            echo "disallowed_tools=Edit,Write,NotebookEdit,WebFetch,Bash(git push:*),Bash(git commit:*),Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh secret:*),Bash(gh workflow:*),Bash(curl:*),Bash(wget:*),Bash(nc:*)"
           } >> "$GITHUB_OUTPUT"
 
           # Draft-on-blocking instruction block — emitted into the prompt only
@@ -593,7 +639,7 @@ jobs:
       - name: Run Claude PR review
         id: claude
         if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
-        uses: anthropics/claude-code-action@4036a180cf690f49529f5d8c79c998855287f590 # v1.0.230
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
         # Gateway + telemetry env. claude-code-action forwards only an allowlist
         # of env names to Claude (its action.yml re-declares them), so these are
         # exactly the allowlisted ones; the rest ride the `settings` input. Each
@@ -636,6 +682,8 @@ jobs:
             --model ${{ inputs.model }}
             --max-turns ${{ inputs.max_turns }}
             --allowedTools "${{ steps.compose.outputs.allowed_tools }}"
+            --disallowedTools "${{ steps.compose.outputs.disallowed_tools }}"
+            ${{ steps.compose.outputs.permission_args }}
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
@@ -716,8 +764,7 @@ jobs:
             instructions.
 
             Do NOT re-flag formatting/style that linters and formatters already
-            own. You cannot build or run the code, so do not claim test, race, or
-            runtime results.
+            own. ${{ inputs.permission_mode == 'auto' && 'Tools outside your allowlist pass a safety classifier: you may run read-only verification (a linter, vet, build, or git history command) when a finding depends on it, but never modify files, install packages, or reach the network. If a command is blocked or the tool is not installed, say the finding is unverified and move on; do not retry it. Report a test or build result only when you actually ran it.' || 'You cannot build or run the code, so do not claim test, race, or runtime results.' }}
 
             ### Focus
 

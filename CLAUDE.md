@@ -277,6 +277,7 @@ explicitly (or via `secrets: inherit`) like the Anthropic ones.
 | `extra_allowed_tools` | `""` | Comma-separated extra tools appended to the default set |
 | `model` | `claude-haiku-5-5` | Model override |
 | `max_turns` | `50` | Max agent turns |
+| `permission_mode` | `""` | `""` = allowlist only (other tool calls silently denied). `auto` = Claude Code auto mode: non-allowlisted calls go to the safety classifier (extra model call, default Sonnet 5 — must be routable through LiteLLM) instead of being denied, so the agent can run read-only verification. A fixed deny list (Edit/Write, push/commit, `gh pr merge/close/review`, `gh api`, curl/wget/nc, WebFetch) applies in every mode. `bypassPermissions` is rejected. |
 | `allowed_bots` | `github-actions` | Bot actors allowed to trigger review |
 | `draft_on_blocking` | `true` | ON by default. A review that posts blocking inline comments flips the PR to draft (`gh pr ready --undo`), pausing auto-reviews until the author resolves threads and marks it ready. Batches re-reviews on churn-heavy PRs into author-controlled cycles — the main run-count/cost reducer. Opt out with `draft_on_blocking: false` where bot-initiated drafting is unwanted. |
 | `review_drafts` | `false` | When true, disables the default draft-PR skip so draft PRs get reviewed too. |
