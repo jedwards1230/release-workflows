@@ -11,6 +11,7 @@ Published by `jedwards1230` and consumed by repos that pin `@v1`.
 .github/workflows/
 ├── ai-release.yml           # Primary reusable: version + tag + AI release notes
 ├── claude-pr-review.yml     # Reusable: AI PR review via claude-code-action@v1
+├── claude-agent.yml         # Reusable: @claude mention bot / prompt-driven automations (issue triage)
 ├── claude-pr-review-cancel.yml  # Reusable: cancel an in-flight review when its PR merges/closes
 ├── claude-pr-review-caller.yml  # This repo's own PR review (calls claude-pr-review.yml@v1 + cancel)
 └── release.yml              # This repo's own release (calls ai-release.yml, moves @v0 tag)
@@ -367,6 +368,72 @@ jobs:
 > The `if:` guards keep the review off `closed` events and the canceller off the
 > review events. This repo's own `claude-pr-review-caller.yml` dogfoods it via a
 > local-path call (`./.github/workflows/claude-pr-review-cancel.yml`).
+
+---
+
+### `claude-agent.yml` — Claude Agent
+
+General-purpose claude-code-action@v1 run for the jobs that are not PR review:
+the interactive `@claude` mention bot (leave `prompt` empty → tag mode) and
+prompt-driven automations such as issue triage (set `prompt` → agent mode).
+
+It exists for the **LiteLLM gateway**: the Tailscale federated identity only
+trusts OIDC tokens whose `job_workflow_ref` is a release-workflows reusable, so
+a caller's own `claude.yml` cannot join the tailnet as `tag:ci-llm`. The
+gateway/Lens block (detect → join → probe → env) is a copy of
+`claude-pr-review.yml`'s, with the same silent fallback to direct Anthropic and
+the same caller variables and secrets. Lens resource attributes match too, with
+`gen_ai.agent.name` taken from `agent_name` and `vcs.change.id` set to the
+issue or PR number.
+
+The trigger filter (`contains(..., '@claude')`) stays in the **caller's** job
+`if:` so non-matching events never start the reusable. The reusable declares no
+`permissions:` — it inherits the caller job's token, since triage and the
+mention bot need different scopes. The caller job must grant `id-token: write`
+for the tailnet join. There is no `concurrency:` group either; a caller that
+wants overlapping runs queued or cancelled sets one on its calling job.
+
+**Inputs (all optional):**
+
+| Input | Default | Notes |
+|---|---|---|
+| `agent_name` | `claude-mention` | `gen_ai.agent.name` in Lens. One name per job type, e.g. `claude-issue-triage` |
+| `prompt` | `""` | Empty = tag mode (`@claude`); set = agent mode |
+| `claude_args` | `""` | Extra Claude Code CLI args, passed through |
+| `additional_permissions` | `actions: read` | claude-code-action `additional_permissions`. App-token path only; with `use_github_token: true` the caller job's permissions govern |
+| `allowed_non_write_users` | `""` | e.g. `*` for issue triage; needs `use_github_token: true` |
+| `use_github_token` | `false` | Pass `GITHUB_TOKEN` instead of the Claude App OIDC token exchange |
+| `use_commit_signing` | `true` | claude-code-action `use_commit_signing` |
+| `fetch_depth` | `1` | checkout depth (`0` = full history) |
+
+**Secrets:** `CLAUDE_CODE_OAUTH_TOKEN` (preferred) / `ANTHROPIC_API_KEY`
+(fallback; one is required), `LITELLM_CI_KEY` and `LENS_TRACING_KEY`
+(optional), exactly as for `claude-pr-review.yml`.
+
+The job fails when the agent result carries `is_error: true` (claude-code-action
+itself exits 0 on a 401/429/529).
+
+**Minimal caller (`@claude`):**
+
+```yaml
+jobs:
+  claude:
+    if: |
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+      ...
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    uses: jedwards1230/release-workflows/.github/workflows/claude-agent.yml@v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}
+      LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }}
+```
 
 ---
 
