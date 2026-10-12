@@ -84,7 +84,7 @@ on:
         type: string
         default: ""
       extra_allowed_tools:
-        description: "Comma-separated extra allowedTools, appended to the default read-only review toolset."
+        description: "Comma-separated extra allowedTools, appended to the default read-only review toolset. The fixed deny floor (see the compose step) wins over these in every permission mode; an entry it overrides draws a warning annotation."
         required: false
         type: string
         default: ""
@@ -358,6 +358,23 @@ jobs:
           # that leaves it off never exposes a state-changing gh command.
           if [ "$DRAFT_ON_BLOCKING" = "true" ]; then BASE_TOOLS="${BASE_TOOLS},Bash(gh pr ready:*)"; fi
           if [ -n "$EXTRA_TOOLS" ]; then BASE_TOOLS="${BASE_TOOLS},${EXTRA_TOOLS}"; fi
+          DENY_TOOLS="Edit,Write,NotebookEdit,WebFetch,Bash(git push:*),Bash(git commit:*),Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh secret:*),Bash(gh workflow:*),Bash(curl:*),Bash(wget:*),Bash(nc:*)"
+          # A caller's extra_allowed_tools entry the floor overrides is denied
+          # at run time, so say so here instead of letting it fail silently.
+          if [ -n "$EXTRA_TOOLS" ]; then
+            IFS=',' read -ra extras <<< "$EXTRA_TOOLS"
+            IFS=',' read -ra denies <<< "$DENY_TOOLS"
+            for extra in "${extras[@]}"; do
+              extra="${extra#"${extra%%[![:space:]]*}"}"; extra="${extra%"${extra##*[![:space:]]}"}"
+              for deny in "${denies[@]}"; do
+                prefix="${deny%:\*)}"
+                if [ "$extra" = "$deny" ] || { [ "$prefix" != "$deny" ] && [[ "$extra" == "$prefix"[:\ \)]* ]]; }; then
+                  echo "::warning title=extra_allowed_tools overridden::'$extra' matches the deny floor rule '$deny' and will be denied in every permission mode."
+                  break
+                fi
+              done
+            done
+          fi
           # Deny rules apply in every permission mode and are evaluated before
           # the auto-mode classifier, so they are the hard floor under it: a
           # reviewer never edits files, pushes, merges, or opens raw network
@@ -368,7 +385,7 @@ jobs:
             echo "allowed_tools<<$DELIM"
             printf '%s\n' "$BASE_TOOLS"
             echo "$DELIM"
-            echo "disallowed_tools=Edit,Write,NotebookEdit,WebFetch,Bash(git push:*),Bash(git commit:*),Bash(gh pr merge:*),Bash(gh pr close:*),Bash(gh pr review:*),Bash(gh api:*),Bash(gh secret:*),Bash(gh workflow:*),Bash(curl:*),Bash(wget:*),Bash(nc:*)"
+            echo "disallowed_tools=$DENY_TOOLS"
           } >> "$GITHUB_OUTPUT"
 
           # Draft-on-blocking instruction block — emitted into the prompt only
