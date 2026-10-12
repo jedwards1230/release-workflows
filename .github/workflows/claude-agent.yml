@@ -1,0 +1,346 @@
+# Reusable general-purpose Claude Code agent.
+#
+# Runs anthropics/claude-code-action@v1 for the two non-review jobs callers
+# have: the interactive `@claude` mention bot (leave `prompt` empty — the
+# action's tag mode answers the triggering comment/issue/review) and prompt-
+# driven automations such as issue triage (set `prompt` — agent mode).
+#
+# It exists so those jobs route model calls through the LiteLLM gateway the
+# same way claude-pr-review.yml does: the Tailscale federated identity only
+# trusts OIDC tokens whose job_workflow_ref is a release-workflows reusable, so
+# the tailnet join must happen in a file in THIS repo, not in the caller.
+#
+# Usage (caller, @claude mention bot):
+#   on:
+#     issue_comment: { types: [created] }
+#     ...
+#   jobs:
+#     claude:
+#       if: contains(github.event.comment.body, '@claude') ...
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#         issues: write
+#         id-token: write
+#         actions: read
+#       uses: jedwards1230/release-workflows/.github/workflows/claude-agent.yml@v1
+#       secrets:
+#         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+#         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+#         LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}     # optional: LiteLLM gateway
+#         LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }} # optional: Lens telemetry
+#
+# No `permissions:` block here on purpose: the job inherits the caller job's
+# token scopes, and the two use cases need different ones (triage: issues
+# write; mention bot: contents/PR/issues write). `id-token: write` is required
+# on the caller for the tailnet join, and for the mention bot's GitHub App
+# token exchange.
+#
+# Optional LiteLLM gateway + Lens telemetry: identical to claude-pr-review.yml
+# — with the caller-repo variables TS_OAUTH_CLIENT_ID / TS_AUDIENCE /
+# LITELLM_CI_BASE_URL / LENS_CI_OTLP_ENDPOINT and the two optional secrets, the
+# run joins the tailnet as tag:ci-llm, routes model calls through LiteLLM and
+# exports OTel traces + logs to Lens with gen_ai.agent.name = `agent_name`.
+# Best-effort: anything missing or unreachable falls back to direct Anthropic,
+# no telemetry.
+name: Claude Agent
+
+on:
+  workflow_call:
+    inputs:
+      agent_name:
+        description: >-
+          Agent name for telemetry (`gen_ai.agent.name` in Lens), e.g.
+          `claude-mention` or `claude-issue-triage`. One name per job type so
+          Lens can tell them apart.
+        required: false
+        type: string
+        default: "claude-mention"
+      prompt:
+        description: >-
+          Prompt for an automation run (agent mode). Empty (default) = tag
+          mode: the action responds to the `@claude` mention in the triggering
+          comment, review or issue.
+        required: false
+        type: string
+        default: ""
+      claude_args:
+        description: "Extra Claude Code CLI args (e.g. `--model`, `--max-turns`, `--allowedTools`), passed through as-is."
+        required: false
+        type: string
+        default: ""
+      additional_permissions:
+        description: "claude-code-action `additional_permissions` (newline-separated `scope: level`)."
+        required: false
+        type: string
+        default: "actions: read"
+      allowed_non_write_users:
+        description: >-
+          claude-code-action `allowed_non_write_users`: users without write
+          access allowed to trigger the run (`*` for all — issue triage).
+          Only honoured with `use_github_token: true`.
+        required: false
+        type: string
+        default: ""
+      use_github_token:
+        description: >-
+          Pass the workflow's GITHUB_TOKEN to the action instead of letting it
+          exchange OIDC for the Claude GitHub App token. Required by
+          `allowed_non_write_users`.
+        required: false
+        type: boolean
+        default: false
+      use_commit_signing:
+        description: "claude-code-action `use_commit_signing` (commits via the API, signed)."
+        required: false
+        type: boolean
+        default: true
+      fetch_depth:
+        description: "actions/checkout fetch-depth (0 = full history)."
+        required: false
+        type: number
+        default: 1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: >-
+          Claude subscription OAuth token (`claude setup-token`). PREFERRED when
+          set — bills to the subscription instead of the metered API.
+        required: false
+      ANTHROPIC_API_KEY:
+        description: >-
+          Anthropic API key. Fallback, used only when CLAUDE_CODE_OAUTH_TOKEN is
+          absent. At least one of the two must be provided (checked at runtime).
+        required: false
+      LITELLM_CI_KEY:
+        description: >-
+          Optional LiteLLM virtual key. With the caller-repo variables
+          TS_OAUTH_CLIENT_ID, TS_AUDIENCE and LITELLM_CI_BASE_URL set, model
+          calls route through the LiteLLM `/anthropic` pass-through over the
+          tailnet. Sent ONLY as the `x-litellm-api-key` header — the Anthropic
+          credential above still passes through untouched.
+        required: false
+      LENS_TRACING_KEY:
+        description: >-
+          Optional Lens upload-only tracing key. With the caller-repo variables
+          TS_OAUTH_CLIENT_ID, TS_AUDIENCE and LENS_CI_OTLP_ENDPOINT set, Claude
+          Code exports OTel traces + logs to Lens over the tailnet.
+        required: false
+
+jobs:
+  claude:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require an Anthropic credential
+        env:
+          HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_OAUTH" != "true" ] && [ "$HAS_API_KEY" != "true" ]; then
+            echo "::error title=No Anthropic credential::Pass CLAUDE_CODE_OAUTH_TOKEN (preferred, subscription billing) and/or ANTHROPIC_API_KEY (fallback) to the reusable workflow."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ inputs.fetch_depth }}
+
+      # LiteLLM gateway + Lens telemetry — the same best-effort block as
+      # claude-pr-review.yml (see the comments there). Owner-gated as defense in
+      # depth: the Tailscale trust policy already only accepts tokens whose
+      # `sub` is a jedwards1230 repo.
+      - name: Detect LiteLLM gateway / Lens telemetry config
+        id: llm
+        if: ${{ github.repository_owner == 'jedwards1230' }}
+        env:
+          HAS_TS: ${{ vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' }}
+          HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
+          HAS_LENS: ${{ vars.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
+        run: |
+          if [ "$HAS_TS" = "true" ] && { [ "$HAS_GATEWAY" = "true" ] || [ "$HAS_LENS" = "true" ]; }; then
+            echo "join=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "join=false" >> "$GITHUB_OUTPUT"
+            echo "LiteLLM gateway / Lens telemetry not configured — running direct to Anthropic, no telemetry."
+          fi
+
+      # Must run in THIS file: the Tailscale federated identity trusts OIDC
+      # tokens with sub = repo:jedwards1230/* AND job_workflow_ref =
+      # jedwards1230/release-workflows/.github/workflows/*.
+      - name: Join tailnet (LiteLLM gateway / Lens)
+        id: tailnet
+        if: ${{ steps.llm.outputs.join == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        with:
+          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ vars.TS_AUDIENCE }}
+          tags: tag:ci-llm
+          timeout: 1m
+          retry: 2
+
+      - name: Probe LiteLLM gateway / Lens endpoints
+        id: route
+        if: ${{ steps.llm.outputs.join == 'true' }}
+        env:
+          JOINED: ${{ steps.tailnet.outcome == 'success' }}
+          HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
+          HAS_LENS: ${{ vars.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
+          BASE_URL: ${{ vars.LITELLM_CI_BASE_URL }}
+          LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}
+          OTLP_ENDPOINT: ${{ vars.LENS_CI_OTLP_ENDPOINT }}
+          AGENT_NAME: ${{ inputs.agent_name }}
+          REPO: ${{ github.repository }}
+          # Issue number, or the PR number for PR review / review-comment
+          # events (issue_comment on a PR already carries it as issue.number).
+          CHANGE_ID: ${{ github.event.issue.number || github.event.pull_request.number }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          if [ "$JOINED" != "true" ]; then
+            echo "::notice title=LiteLLM/Lens skipped::Tailnet join failed — running direct to Anthropic, no telemetry."
+            sudo tailscale down 2>/dev/null || true
+            exit 0
+          fi
+
+          # gateway/telemetry outputs are written only on success; unset = off.
+          ROUTED=false
+          BODY="${RUNNER_TEMP}/llm-probe.json"
+          # probe URL [curl args...] → prints the HTTP status ("000" = no answer)
+          probe() {
+            local url=$1; shift
+            curl -sS -o "$BODY" -m 10 -w '%{http_code}' "$@" "$url" 2>/dev/null || true
+          }
+
+          # Only LiteLLM's own key rejections count as rejected; any other
+          # 401 (e.g. the pass-through's "no Anthropic credential" reply to
+          # this credential-less probe) means the gateway accepted the key.
+          key_rejected() {
+            case "$1" in 401|403|429) ;; *) return 1 ;; esac
+            REJECT_TYPE=$(jq -r '.error.type // empty' "$BODY" 2>/dev/null)
+            local msg
+            msg=$(jq -r '.error.message // empty' "$BODY" 2>/dev/null)
+            case "$REJECT_TYPE" in
+              auth_error|token_not_found_in_db|expired_key|budget_exceeded|*_model_access_denied) return 0 ;;
+            esac
+            case "$msg" in "Authentication Error"*) REJECT_TYPE=${REJECT_TYPE:-auth}; return 0 ;; esac
+            return 1
+          }
+
+          if [ "$HAS_GATEWAY" = "true" ]; then
+            # Header via stdin (-H @-) so the key never lands on the curl argv.
+            CODE=$(printf 'x-litellm-api-key: Bearer %s\n' "$LITELLM_CI_KEY" | probe "${BASE_URL%/}/v1/models" -H @-)
+            CODE=${CODE:-000}
+            if [ "$CODE" = "000" ] || [ "$CODE" -ge 500 ]; then
+              echo "::notice title=LiteLLM gateway unreachable::LITELLM_CI_BASE_URL did not answer (HTTP $CODE) — running direct to Anthropic."
+            elif key_rejected "$CODE"; then
+              echo "::notice title=LiteLLM key rejected::LiteLLM refused LITELLM_CI_KEY (HTTP $CODE, $REJECT_TYPE) — running direct to Anthropic."
+            else
+              echo "gateway=true" >> "$GITHUB_OUTPUT"
+              ROUTED=true
+            fi
+          fi
+
+          if [ "$HAS_LENS" = "true" ]; then
+            CODE=$(probe "${OTLP_ENDPOINT%/}/v1/traces")
+            CODE=${CODE:-000}
+            if [ "$CODE" != "000" ] && [ "$CODE" -lt 500 ]; then
+              echo "telemetry=true" >> "$GITHUB_OUTPUT"
+              ROUTED=true
+              # OTEL_RESOURCE_ATTRIBUTES is comma-separated key=value; percent-
+              # encode every value so a stray comma/space can't corrupt it.
+              enc() { jq -rn --arg v "$1" '$v|@uri'; }
+              echo "resource_attributes=gen_ai.agent.name=$(enc "$AGENT_NAME"),vcs.owner.name=$(enc "${REPO%%/*}"),vcs.repository.name=$(enc "${REPO#*/}"),vcs.change.id=$(enc "$CHANGE_ID"),cicd.pipeline.run.id=$(enc "$RUN_ID"),cicd.pipeline.run.attempt=$(enc "$RUN_ATTEMPT")" >> "$GITHUB_OUTPUT"
+              # Telemetry vars claude-code-action does NOT forward from step
+              # env go through its `settings` input instead.
+              echo "settings=$(jq -nc '{env: {
+                CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+                OTEL_TRACES_EXPORTER: "otlp",
+                OTEL_TRACES_EXPORT_INTERVAL: "1000",
+                OTEL_LOG_USER_PROMPTS: "1",
+                OTEL_LOG_ASSISTANT_RESPONSES: "1",
+                OTEL_LOG_TOOL_DETAILS: "1",
+                OTEL_LOG_TOOL_CONTENT: "1"
+              }}')" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice title=Lens unreachable::LENS_CI_OTLP_ENDPOINT did not answer (HTTP $CODE) — no telemetry for this run."
+            fi
+          fi
+          rm -f "$BODY"
+
+          # Nothing routed → leave the tailnet now so its DNS/routes can't
+          # affect the direct-to-Anthropic run.
+          if [ "$ROUTED" != "true" ]; then sudo tailscale down 2>/dev/null || true; fi
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
+        # Only allowlisted env names reach Claude (see claude-pr-review.yml);
+        # each is empty unless the probe step routed to it.
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.route.outputs.gateway == 'true' && vars.LITELLM_CI_BASE_URL || '' }}
+          ANTHROPIC_CUSTOM_HEADERS: "${{ steps.route.outputs.gateway == 'true' && format('x-litellm-api-key: Bearer {0}', secrets.LITELLM_CI_KEY) || '' }}"
+          CLAUDE_CODE_ENABLE_TELEMETRY: ${{ steps.route.outputs.telemetry == 'true' && '1' || '' }}
+          OTEL_METRICS_EXPORTER: ${{ steps.route.outputs.telemetry == 'true' && 'none' || '' }}
+          OTEL_LOGS_EXPORTER: ${{ steps.route.outputs.telemetry == 'true' && 'otlp' || '' }}
+          OTEL_EXPORTER_OTLP_PROTOCOL: ${{ steps.route.outputs.telemetry == 'true' && 'http/protobuf' || '' }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ steps.route.outputs.telemetry == 'true' && vars.LENS_CI_OTLP_ENDPOINT || '' }}
+          OTEL_EXPORTER_OTLP_HEADERS: ${{ steps.route.outputs.telemetry == 'true' && format('Authorization=Bearer {0}', secrets.LENS_TRACING_KEY) || '' }}
+          OTEL_LOGS_EXPORT_INTERVAL: ${{ steps.route.outputs.telemetry == 'true' && '1000' || '' }}
+          OTEL_RESOURCE_ATTRIBUTES: ${{ steps.route.outputs.resource_attributes }}
+        with:
+          settings: ${{ steps.route.outputs.settings }}
+          # Exactly one credential is ever set — the action does not arbitrate.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
+          github_token: ${{ inputs.use_github_token && github.token || '' }}
+          prompt: ${{ inputs.prompt }}
+          claude_args: ${{ inputs.claude_args }}
+          additional_permissions: ${{ inputs.additional_permissions }}
+          allowed_non_write_users: ${{ inputs.allowed_non_write_users }}
+          use_commit_signing: ${{ inputs.use_commit_signing }}
+
+      - name: Write job summary
+        if: always()
+        run: |
+          EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
+          {
+            echo "## Claude Agent (\`${{ inputs.agent_name }}\`)"
+            echo ""
+            echo "**Session:** \`${{ steps.claude.outputs.session_id }}\`"
+            echo "**Model route:** ${{ steps.route.outputs.gateway == 'true' && 'LiteLLM gateway' || 'direct Anthropic' }} · **Telemetry:** ${{ steps.route.outputs.telemetry == 'true' && 'Lens (traces + logs)' || 'off' }}"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "$EXEC_FILE" ]; then
+            RESULT=$(jq -r 'last | .subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+            TURNS=$(jq -r 'last | .num_turns // "?"' "$EXEC_FILE" 2>/dev/null || echo "?")
+            COST=$(jq -r 'last | .total_cost_usd // "?"' "$EXEC_FILE" 2>/dev/null || echo "?")
+            {
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| Result | \`$RESULT\` |"
+              echo "| Turns | $TURNS |"
+              echo "| Cost | \$${COST} |"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # claude-code-action exits 0 even when the agent run errored (401
+      # expired token, 429, 529): the result JSON carries is_error: true but
+      # the job stays green. Fail it so an outage is a red run, not a no-op.
+      # No execution output = the action skipped (no trigger phrase, or the
+      # workflow-validation skip) — not an error.
+      - name: Fail if the agent run errored
+        if: always()
+        run: |
+          set -uo pipefail
+          EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
+          [ -f "$EXEC_FILE" ] || exit 0
+          IS_ERROR=$(jq -r 'last | .is_error // false' "$EXEC_FILE" 2>/dev/null || echo "true")
+          if [ "$IS_ERROR" = "true" ]; then
+            STATUS=$(jq -r 'last | .api_error_status // "n/a"' "$EXEC_FILE" 2>/dev/null || echo "n/a")
+            SUBTYPE=$(jq -r 'last | .subtype // "unknown"' "$EXEC_FILE" 2>/dev/null || echo "unknown")
+            echo "::error title=Claude agent failed::Agent returned is_error=true (api_error_status=$STATUS, subtype=$SUBTYPE)."
+            exit 1
+          fi
