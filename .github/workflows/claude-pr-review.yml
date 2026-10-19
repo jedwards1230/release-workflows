@@ -675,7 +675,7 @@ jobs:
       - name: Run Claude PR review
         id: claude
         if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
-        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
+        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
         # Gateway + telemetry env. claude-code-action forwards only an allowlist
         # of env names to Claude (its action.yml re-declares them), so these are
         # exactly the allowlisted ones; the rest ride the `settings` input. Each
