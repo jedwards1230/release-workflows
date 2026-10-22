@@ -207,12 +207,16 @@ reserved for the unexpected workflow-validation skip).
 | `ANTHROPIC_API_KEY` | one of the two | Fallback, used only when the OAuth token is absent (metered pay-per-token billing). |
 | `LITELLM_CI_KEY` | no | LiteLLM virtual key — enables the gateway route below. |
 | `LENS_TRACING_KEY` | no | LiteLLM Lens upload-only tracing key — enables telemetry below. |
+| `TS_OAUTH_CLIENT_ID` | no | Tailscale federated-identity client ID (required for either half below) |
+| `TS_AUDIENCE` | no | Tailscale federated-identity audience (required for either half below) |
+| `LITELLM_CI_BASE_URL` | no | LiteLLM `/anthropic` pass-through URL on the tailnet, e.g. `https://<host>.<tailnet>.ts.net/anthropic` |
+| `LENS_CI_OTLP_ENDPOINT` | no | Lens OTLP ingest base URL (no `/v1/...` suffix), e.g. `https://<host>.<tailnet>.ts.net/lens-ingest` |
 
 **LiteLLM gateway + Lens telemetry (optional, best-effort).** On by default
-whenever the caller repo carries the config; otherwise skipped silently (forks,
+whenever the caller passes the config; otherwise skipped silently (forks,
 repos not opted in, callers outside the `jedwards1230` owner). The workflow joins a Tailscale tailnet via GitHub OIDC
 workload identity (`tailscale/github-action`, `tags: tag:ci-llm`, no stored
-Tailscale secret), probes each endpoint with a 10s timeout (the gateway probe
+Tailscale credential), probes each endpoint with a 10s timeout (the gateway probe
 also presents the LiteLLM key), and:
 
 - **Gateway** (`LITELLM_CI_BASE_URL` + `LITELLM_CI_KEY`): routes the review's
@@ -252,20 +256,27 @@ Two things to know before opting a repo in:
 - **The model credential transits LiteLLM.** The caller's
   `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` is forwarded through the
   pass-through. LiteLLM's logging must not record forwarded auth headers.
-- **The vars show up in Actions logs.** `vars.*` are not masked, so a public
-  caller repo's logs show the tailnet hostnames and the Tailscale client ID and
-  audience. None of them is usable without a matching OIDC token or tailnet
-  membership. The two keys are secrets and stay masked.
+- **All six values are secrets, so they stay out of public logs.** The
+  Tailscale client ID and audience and the two endpoint URLs are configuration,
+  not credentials, but they are secrets rather than repo variables: `vars.*`
+  print unmasked in run logs, and a public caller repo's logs are public. The
+  runner masks each exact string, which also covers every URL built on top of
+  one. Before the tailnet join, a `Mask gateway / telemetry hostnames` step
+  masks two forms the exact-string masks miss, the bare hostname and the
+  `<tailnet>.ts.net` domain, since a failed join or connection can print either
+  in its stderr. The join runs with `log-mode: quiet`, so even a debug re-run
+  doesn't echo `tailscale status --json`, which lists bare node labels that no
+  mask covers. Masks are per job, so a new job that uses these secrets needs
+  the same step.
 
-| Caller repo variable (`vars.*`) | Notes |
-|---|---|
-| `TS_OAUTH_CLIENT_ID` | Tailscale federated-identity client ID (required for either half) |
-| `TS_AUDIENCE` | Tailscale federated-identity audience (required for either half) |
-| `LITELLM_CI_BASE_URL` | LiteLLM `/anthropic` pass-through URL on the tailnet, e.g. `https://<host>.<tailnet>.ts.net/anthropic` |
-| `LENS_CI_OTLP_ENDPOINT` | Lens OTLP ingest base URL (no `/v1/...` suffix), e.g. `https://<host>.<tailnet>.ts.net/lens-ingest` |
-
-Variables resolve from the calling repo. The two secrets must be passed
-explicitly (or via `secrets: inherit`) like the Anthropic ones.
+All six must be passed explicitly (or via `secrets: inherit`) like the
+Anthropic ones. Earlier releases read the four non-key values from caller repo
+variables; this one reads only the secrets. A caller with the four still set as
+variables (and not passed as secrets) reviews direct to Anthropic with no
+telemetry, the same as an unconfigured caller. Mapping the four secrets against
+a pin older than the release that declares them fails workflow validation
+(`Invalid secret ... is not defined in the referenced workflow`), so re-pin in
+the same change.
 
 **Optional inputs:**
 
@@ -302,8 +313,13 @@ jobs:
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # fallback (metered API)
-      LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }} # optional: LiteLLM gateway
-      LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }} # optional: Lens telemetry
+      # optional: LiteLLM gateway + Lens telemetry
+      LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}
+      LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }}
+      TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+      TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+      LITELLM_CI_BASE_URL: ${{ secrets.LITELLM_CI_BASE_URL }}
+      LENS_CI_OTLP_ENDPOINT: ${{ secrets.LENS_CI_OTLP_ENDPOINT }}
 ```
 
 ---

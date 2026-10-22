@@ -35,8 +35,13 @@
 #       secrets:
 #         CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
 #         ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}             # fallback (metered API)
-#         LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}     # optional: LiteLLM gateway
-#         LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }} # optional: Lens telemetry
+#         # optional: LiteLLM gateway + Lens telemetry (see below)
+#         LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}
+#         LENS_TRACING_KEY: ${{ secrets.LENS_TRACING_KEY }}
+#         TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+#         TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+#         LITELLM_CI_BASE_URL: ${{ secrets.LITELLM_CI_BASE_URL }}
+#         LENS_CI_OTLP_ENDPOINT: ${{ secrets.LENS_CI_OTLP_ENDPOINT }}
 #       with:
 #         focus: |
 #           - Path traversal in the /raw and .md handlers.
@@ -56,11 +61,12 @@
 # report a build failure that is an environment gap, not a finding about the
 # diff — install it here and the review is about the code again.
 #
-# Optional LiteLLM gateway + Lens telemetry: with the caller-repo variables
-# TS_OAUTH_CLIENT_ID / TS_AUDIENCE / LITELLM_CI_BASE_URL / LENS_CI_OTLP_ENDPOINT
-# and the two optional secrets above, the review joins the tailnet, routes model
-# calls through LiteLLM and exports OTel traces + logs to Lens. Best-effort:
-# anything missing or unreachable falls back to direct Anthropic, no telemetry.
+# Optional LiteLLM gateway + Lens telemetry: with the six optional secrets above
+# passed, the review joins the tailnet, routes model calls through LiteLLM and
+# exports OTel traces + logs to Lens. Best-effort: anything missing or
+# unreachable falls back to direct Anthropic, no telemetry. The tailnet client
+# ID, audience and endpoint URLs are secrets rather than repo variables because
+# variables print unmasked in run logs, and a public caller's logs are public.
 name: PR Review
 
 run-name: "Review PR #${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}"
@@ -190,8 +196,8 @@ on:
         required: false
       LITELLM_CI_KEY:
         description: >-
-          Optional LiteLLM virtual key. With the caller-repo variables
-          TS_OAUTH_CLIENT_ID, TS_AUDIENCE and LITELLM_CI_BASE_URL set, the
+          Optional LiteLLM virtual key. With the TS_OAUTH_CLIENT_ID,
+          TS_AUDIENCE and LITELLM_CI_BASE_URL secrets also passed, the
           review's model calls route through the LiteLLM `/anthropic`
           pass-through over the tailnet. Sent ONLY as the `x-litellm-api-key`
           header — the Anthropic credential above still passes through
@@ -199,10 +205,35 @@ on:
         required: false
       LENS_TRACING_KEY:
         description: >-
-          Optional LiteLLM Lens upload-only tracing key. With the caller-repo
-          variables TS_OAUTH_CLIENT_ID, TS_AUDIENCE and LENS_CI_OTLP_ENDPOINT
-          set, Claude Code exports OTel traces + logs (full prompt/response/tool
-          content) to Lens over the tailnet. Absent → no telemetry.
+          Optional LiteLLM Lens upload-only tracing key. With the
+          TS_OAUTH_CLIENT_ID, TS_AUDIENCE and LENS_CI_OTLP_ENDPOINT secrets
+          also passed, Claude Code exports OTel traces + logs (full
+          prompt/response/tool content) to Lens over the tailnet. Absent → no
+          telemetry.
+        required: false
+      # The four below are configuration, not credentials. They are secrets
+      # (not repo variables) only so the runner masks them: `vars.*` print
+      # unmasked in run logs, and a public caller's logs are public.
+      TS_OAUTH_CLIENT_ID:
+        description: >-
+          Optional Tailscale federated-identity client ID for the tailnet join
+          that both the gateway and telemetry need. Absent → no tailnet join,
+          direct to Anthropic, no telemetry.
+        required: false
+      TS_AUDIENCE:
+        description: >-
+          Optional Tailscale federated-identity audience, paired with
+          TS_OAUTH_CLIENT_ID. Absent → no tailnet join.
+        required: false
+      LITELLM_CI_BASE_URL:
+        description: >-
+          Optional LiteLLM `/anthropic` pass-through URL on the tailnet, used
+          with LITELLM_CI_KEY. Absent → direct to Anthropic.
+        required: false
+      LENS_CI_OTLP_ENDPOINT:
+        description: >-
+          Optional Lens OTLP ingest base URL on the tailnet (no `/v1/...`
+          suffix), used with LENS_TRACING_KEY. Absent → no telemetry.
         required: false
 
 concurrency:
@@ -522,21 +553,57 @@ jobs:
           printf '%s' "$PRIOR" | emit prior
 
       # LiteLLM gateway + Lens telemetry — best-effort, on whenever the caller
-      # repo carries the config (vars TS_OAUTH_CLIENT_ID / TS_AUDIENCE /
-      # LITELLM_CI_BASE_URL / LENS_CI_OTLP_ENDPOINT, secrets LITELLM_CI_KEY /
+      # passes the config (secrets TS_OAUTH_CLIENT_ID / TS_AUDIENCE /
+      # LITELLM_CI_BASE_URL / LENS_CI_OTLP_ENDPOINT / LITELLM_CI_KEY /
       # LENS_TRACING_KEY). None of it may break a review: missing config skips
       # silently (forks, repos not opted in), and a failed tailnet join or an
       # unreachable endpoint falls back to direct Anthropic / no telemetry with
       # a ::notice::. The gateway and telemetry halves gate independently.
       # Owner-gated as defense in depth: the Tailscale trust policy already
       # only accepts tokens whose `sub` is a jedwards1230 repo.
+      #
+      # The runner masks each secret's exact string, which covers every URL
+      # built on top of it. It does not cover the bare hostname, or the tailnet
+      # domain inside another node's name, and a failed join or connection can
+      # print either in its stderr. Mask both forms before anything touches the
+      # tailnet. That covers each endpoint's FQDN and every
+      # <node>.<tailnet>.ts.net name, but not a bare node label (e.g. a peer's
+      # HostName), which is why the join step below also runs in quiet log
+      # mode. Masks are per job, so any new job that uses these secrets needs
+      # this step too. The values come in via env, never `${{ }}` in the
+      # script, and nothing here prints them.
+      - name: Mask gateway / telemetry hostnames
+        env:
+          LITELLM_CI_BASE_URL: ${{ secrets.LITELLM_CI_BASE_URL }}
+          LENS_CI_OTLP_ENDPOINT: ${{ secrets.LENS_CI_OTLP_ENDPOINT }}
+        run: |
+          set -euo pipefail
+          for url in "${LITELLM_CI_BASE_URL:-}" "${LENS_CI_OTLP_ENDPOINT:-}"; do
+            host=${url#*://}       # drop the scheme
+            host=${host%%[/?#]*}   # drop path, query, fragment
+            host=${host##*@}       # drop userinfo
+            host=${host%:*}        # drop a port
+            host=${host%.}         # drop a trailing root dot
+            host=${host,,}         # DNS names print lowercase
+            [ -n "$host" ] || continue
+            echo "::add-mask::${host}"
+            # MagicDNS names are <node>.<tailnet>.ts.net: mask that shared
+            # suffix so other nodes' DNS names print as <node>.*** too.
+            case "$host" in
+              *.*.ts.net)
+                tailnet=${host%.ts.net}
+                echo "::add-mask::${tailnet##*.}.ts.net"
+                ;;
+            esac
+          done
+
       - name: Detect LiteLLM gateway / Lens telemetry config
         id: llm
         if: ${{ github.repository_owner == 'jedwards1230' && !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
         env:
-          HAS_TS: ${{ vars.TS_OAUTH_CLIENT_ID != '' && vars.TS_AUDIENCE != '' }}
-          HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
-          HAS_LENS: ${{ vars.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
+          HAS_TS: ${{ secrets.TS_OAUTH_CLIENT_ID != '' && secrets.TS_AUDIENCE != '' }}
+          HAS_GATEWAY: ${{ secrets.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
+          HAS_LENS: ${{ secrets.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
         run: |
           if [ "$HAS_TS" = "true" ] && { [ "$HAS_GATEWAY" = "true" ] || [ "$HAS_LENS" = "true" ]; }; then
             echo "join=true" >> "$GITHUB_OUTPUT"
@@ -549,7 +616,12 @@ jobs:
       # tokens with sub = repo:jedwards1230/* AND job_workflow_ref =
       # jedwards1230/release-workflows/.github/workflows/*, so a caller's own
       # workflow (or a composite action) can't join. No stored Tailscale
-      # secret — GitHub OIDC (id-token: write) is the credential.
+      # credential (the client ID and audience only identify the trust
+      # policy) — GitHub OIDC (id-token: write) is the credential.
+      # `log-mode: quiet` keeps the action's commands silent even when step
+      # debug is on. Otherwise a debug re-run echoes `tailscale status --json`
+      # (node names, the tailnet name) into a log that is public for a public
+      # caller. Failures still print their stderr and a warning.
       - name: Join tailnet (LiteLLM gateway / Lens)
         id: tailnet
         if: ${{ steps.llm.outputs.join == 'true' }}
@@ -557,11 +629,12 @@ jobs:
         timeout-minutes: 3
         uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
         with:
-          oauth-client-id: ${{ vars.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ vars.TS_AUDIENCE }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
           tags: tag:ci-llm
           timeout: 1m
           retry: 2
+          log-mode: quiet
 
       # Probe each endpoint with a short timeout and only route to what
       # answers: no answer or a 5xx falls back. The gateway probe also sends
@@ -573,11 +646,11 @@ jobs:
         if: ${{ steps.llm.outputs.join == 'true' }}
         env:
           JOINED: ${{ steps.tailnet.outcome == 'success' }}
-          HAS_GATEWAY: ${{ vars.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
-          HAS_LENS: ${{ vars.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
-          BASE_URL: ${{ vars.LITELLM_CI_BASE_URL }}
+          HAS_GATEWAY: ${{ secrets.LITELLM_CI_BASE_URL != '' && secrets.LITELLM_CI_KEY != '' }}
+          HAS_LENS: ${{ secrets.LENS_CI_OTLP_ENDPOINT != '' && secrets.LENS_TRACING_KEY != '' }}
+          BASE_URL: ${{ secrets.LITELLM_CI_BASE_URL }}
           LITELLM_CI_KEY: ${{ secrets.LITELLM_CI_KEY }}
-          OTLP_ENDPOINT: ${{ vars.LENS_CI_OTLP_ENDPOINT }}
+          OTLP_ENDPOINT: ${{ secrets.LENS_CI_OTLP_ENDPOINT }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
@@ -683,13 +756,13 @@ jobs:
         # the action passes today, which Claude Code treats as unset. Secrets
         # stay in `secrets.*` expressions so the runner masks them.
         env:
-          ANTHROPIC_BASE_URL: ${{ steps.route.outputs.gateway == 'true' && vars.LITELLM_CI_BASE_URL || '' }}
+          ANTHROPIC_BASE_URL: ${{ steps.route.outputs.gateway == 'true' && secrets.LITELLM_CI_BASE_URL || '' }}
           ANTHROPIC_CUSTOM_HEADERS: "${{ steps.route.outputs.gateway == 'true' && format('x-litellm-api-key: Bearer {0}', secrets.LITELLM_CI_KEY) || '' }}"
           CLAUDE_CODE_ENABLE_TELEMETRY: ${{ steps.route.outputs.telemetry == 'true' && '1' || '' }}
           OTEL_METRICS_EXPORTER: ${{ steps.route.outputs.telemetry == 'true' && 'none' || '' }}
           OTEL_LOGS_EXPORTER: ${{ steps.route.outputs.telemetry == 'true' && 'otlp' || '' }}
           OTEL_EXPORTER_OTLP_PROTOCOL: ${{ steps.route.outputs.telemetry == 'true' && 'http/protobuf' || '' }}
-          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ steps.route.outputs.telemetry == 'true' && vars.LENS_CI_OTLP_ENDPOINT || '' }}
+          OTEL_EXPORTER_OTLP_ENDPOINT: ${{ steps.route.outputs.telemetry == 'true' && secrets.LENS_CI_OTLP_ENDPOINT || '' }}
           OTEL_EXPORTER_OTLP_HEADERS: ${{ steps.route.outputs.telemetry == 'true' && format('Authorization=Bearer {0}', secrets.LENS_TRACING_KEY) || '' }}
           # Short runs: export every second rather than every 5s so little is
           # left to the exit-time flush.
