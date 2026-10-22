@@ -261,11 +261,13 @@ Two things to know before opting a repo in:
   not credentials, but they are secrets rather than repo variables: `vars.*`
   print unmasked in run logs, and a public caller repo's logs are public. The
   runner masks each exact string, which also covers every URL built on top of
-  one. A `Mask gateway / telemetry hostnames` step masks the forms it doesn't
-  cover (the bare hostname and the `<tailnet>.ts.net` domain) before the tailnet
-  join, since a debug re-run of the join prints `tailscale status --json` and a
-  failed join or connection prints its stderr. Masks are per job, so a new job
-  that uses these secrets needs the same step.
+  one. Before the tailnet join, a `Mask gateway / telemetry hostnames` step
+  masks two forms the exact-string masks miss, the bare hostname and the
+  `<tailnet>.ts.net` domain, since a failed join or connection can print either
+  in its stderr. The join runs with `log-mode: quiet`, so even a debug re-run
+  doesn't echo `tailscale status --json`, which lists bare node labels that no
+  mask covers. Masks are per job, so a new job that uses these secrets needs
+  the same step.
 
 All six must be passed explicitly (or via `secrets: inherit`) like the
 Anthropic ones. Earlier releases read the four non-key values from caller repo

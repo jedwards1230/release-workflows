@@ -564,19 +564,21 @@ jobs:
       #
       # The runner masks each secret's exact string, which covers every URL
       # built on top of it. It does not cover the bare hostname, or the tailnet
-      # domain inside another node's name, and those can still reach the log:
-      # a debug re-run of the tailnet join prints `tailscale status --json`,
-      # and a failed join or connection prints its stderr. Mask both forms
-      # before anything touches the tailnet. Masks are per job, so any new job
-      # that uses these secrets needs this step too. The values come in via
-      # env, never `${{ }}` in the script, and nothing here prints them.
+      # domain inside another node's name, and a failed join or connection can
+      # print either in its stderr. Mask both forms before anything touches the
+      # tailnet. That covers each endpoint's FQDN and every
+      # <node>.<tailnet>.ts.net name, but not a bare node label (e.g. a peer's
+      # HostName), which is why the join step below also runs in quiet log
+      # mode. Masks are per job, so any new job that uses these secrets needs
+      # this step too. The values come in via env, never `${{ }}` in the
+      # script, and nothing here prints them.
       - name: Mask gateway / telemetry hostnames
         env:
           LITELLM_CI_BASE_URL: ${{ secrets.LITELLM_CI_BASE_URL }}
           LENS_CI_OTLP_ENDPOINT: ${{ secrets.LENS_CI_OTLP_ENDPOINT }}
         run: |
           set -euo pipefail
-          for url in "$LITELLM_CI_BASE_URL" "$LENS_CI_OTLP_ENDPOINT"; do
+          for url in "${LITELLM_CI_BASE_URL:-}" "${LENS_CI_OTLP_ENDPOINT:-}"; do
             host=${url#*://}       # drop the scheme
             host=${host%%[/?#]*}   # drop path, query, fragment
             host=${host##*@}       # drop userinfo
@@ -585,8 +587,8 @@ jobs:
             host=${host,,}         # DNS names print lowercase
             [ -n "$host" ] || continue
             echo "::add-mask::${host}"
-            # MagicDNS names are <node>.<tailnet>.ts.net: mask the tailnet
-            # domain so every other node's name on it is covered too.
+            # MagicDNS names are <node>.<tailnet>.ts.net: mask that shared
+            # suffix so other nodes' DNS names print as <node>.*** too.
             case "$host" in
               *.*.ts.net)
                 tailnet=${host%.ts.net}
@@ -616,6 +618,10 @@ jobs:
       # workflow (or a composite action) can't join. No stored Tailscale
       # credential (the client ID and audience only identify the trust
       # policy) — GitHub OIDC (id-token: write) is the credential.
+      # `log-mode: quiet` keeps the action's commands silent even when step
+      # debug is on. Otherwise a debug re-run echoes `tailscale status --json`
+      # (node names, the tailnet name) into a log that is public for a public
+      # caller. Failures still print their stderr and a warning.
       - name: Join tailnet (LiteLLM gateway / Lens)
         id: tailnet
         if: ${{ steps.llm.outputs.join == 'true' }}
@@ -628,6 +634,7 @@ jobs:
           tags: tag:ci-llm
           timeout: 1m
           retry: 2
+          log-mode: quiet
 
       # Probe each endpoint with a short timeout and only route to what
       # answers: no answer or a 5xx falls back. The gateway probe also sends
