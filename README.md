@@ -13,6 +13,7 @@ For Claude Code plugin marketplace validation, see [jedwards1230/claude-plugin-a
 - **Semantic Version Calculation**: Automatically calculates next version from existing tags
 - **Helm Chart Bump**: Optionally bumps `version` + `appVersion` in a `Chart.yaml`, committed into the tagged commit (not pushed to main)
 - **GitHub Releases**: Creates releases with proper tagging and artifact handling
+- **Claude Agent**: `@claude` mention bot and prompt-driven automations (issue triage) via claude-code-action, routed through the LiteLLM gateway with Lens telemetry when configured (`claude-agent.yml`; inputs and caller example in `CLAUDE.md`)
 - **Moving Tags**: Maintains major and minor version tags (e.g., `v1`, `v1.2`) for reusable-workflow consumers
 
 ## Workflow
