@@ -189,8 +189,11 @@ placeholder (defined once as `PLACEHOLDER`). Otherwise it posts the agent's
 result text as a comment, recovering the case where the progress comment was
 never updated. It does not key on the "Claude finished" header, which the action
 adds even over a placeholder. Any other comment layout reads as "not delivered",
-so layout drift costs a cosmetic double-post, never a suppressed verdict. It is
-idempotent and never fails the job.
+so layout drift costs a cosmetic double-post. The one blind spot is the action
+rewording its placeholder: the new text would read as delivered until
+`PLACEHOLDER` is updated (requiring a `###` verdict heading instead would close
+that, at the price of a double-post whenever the agent's summary format drifts).
+It is idempotent and never fails the job.
 
 **An unfinished review is reported, not recovered.** A new `Assess review
 completeness` step marks a run incomplete when the result message's

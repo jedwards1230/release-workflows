@@ -1272,11 +1272,17 @@ jobs:
           # the header proves nothing, and a body that is still the placeholder
           # sits under it. The verdict reached the PR only if the body after that
           # one-line header and its `---` line is non-empty and is not the
-          # placeholder. Any other layout reads as "not delivered": the check
-          # fails safe, so drift costs a cosmetic double-post, never a suppressed
-          # verdict (the case this net guards).
+          # placeholder. Any other layout reads as "not delivered", so layout
+          # drift costs a cosmetic double-post. The one blind spot is the action
+          # rewording its placeholder: the new text would read as a delivered
+          # body until PLACEHOLDER is updated. (Requiring a `###` verdict heading
+          # instead would close that, at the price of a double-post whenever the
+          # agent's summary format drifts.)
           # (An earlier version matched a 120-char slice of the raw result, which
-          # never matched; the one after it matched the header, which did.)
+          # never matched; the one after it matched the header, which the action
+          # also stamps over a placeholder, so it suppressed the fallback.)
+          # The action's initial progress-comment body (src/github/operations/
+          # comments/common.ts); update here if it changes.
           PLACEHOLDER="I'll analyze this and get back to you."
           DELIVERED=false
           while IFS= read -r ENCODED; do
