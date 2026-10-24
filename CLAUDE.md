@@ -183,8 +183,10 @@ and `---` to whatever body is there, whether or not the agent ever wrote one, so
 a placeholder reads as a finished review.
 
 **The safety net looks for the verdict, not the header.** A final `Ensure review
-verdict reached the PR` step treats the verdict as delivered only if this run's
-bot comment has, after the one-line header and its `---` line, the `###` verdict
+verdict reached the PR` step treats the verdict as delivered only if this run
+attempt's bot comment (one created since the review step started; the run URL
+carries no attempt number, so a re-run must not inherit an earlier attempt's
+verdict) has, after the one-line header and its `---` line, the `###` verdict
 heading (🔴 / 🟡 / 🟢) the prompt mandates, outside code fences and `<details>`
 blocks (the same view the backstop classifies on). A body that is still the
 placeholder, or only an interim checklist, has none. Otherwise it posts the agent's result

@@ -1209,6 +1209,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
+          STARTED_AT: ${{ steps.started.outputs.at }}
           INCOMPLETE: ${{ steps.assess.outputs.incomplete }}
           INCOMPLETE_DETAIL: ${{ steps.assess.outputs.detail }}
           GH_TOKEN: ${{ github.token }}
@@ -1266,7 +1267,11 @@ jobs:
 
           # Idempotency keyed on this run's id, not a fuzzy content slice.
           # claude-code-action's track_progress posts its comment as a bot with a
-          # link back to THIS run (…/actions/runs/<run_id>). Once the run ends the
+          # link back to THIS run (…/actions/runs/<run_id>), which carries no
+          # attempt number: a re-run's comment links the same run, and an earlier
+          # attempt's verdict must not stand in for this one's. So only comments
+          # created since this attempt's review step started count (the cancelled-
+          # run step scopes the same way). Once the run ends the
           # action rewrites it as "<header>\n\n---\n<body>", adding the "Claude
           # finished …" header whether or not the agent ever wrote a body — so
           # the header proves nothing. The body under it is the action's
@@ -1303,6 +1308,7 @@ jobs:
           done < <(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq '
             .[] | select(.user.type == "Bot")
             | select(.body | test("/runs/'"$RUN_ID"'([^0-9]|$)"))
+            | select(.created_at >= "'"$STARTED_AT"'")
             | (.body | split("\n")
                | if length > 3 and .[1] == "" and .[2] == "---"
                  then .[3:] | join("\n")
