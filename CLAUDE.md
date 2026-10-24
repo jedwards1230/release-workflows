@@ -182,18 +182,19 @@ has returned). When the run ends the action prepends
 and `---` to whatever body is there, whether or not the agent ever wrote one, so
 a placeholder reads as a finished review.
 
-**The safety net is placeholder-aware.** A final `Ensure review verdict reached
-the PR` step treats the verdict as delivered only if this run's bot comment has
-a non-empty body after the one-line header and its `---` line that is not the
-placeholder (defined once as `PLACEHOLDER`). Otherwise it posts the agent's
-result text as a comment, recovering the case where the progress comment was
-never updated. It does not key on the "Claude finished" header, which the action
-adds even over a placeholder. Any other comment layout reads as "not delivered",
-so layout drift costs a cosmetic double-post. The one blind spot is the action
-rewording its placeholder: the new text would read as delivered until
-`PLACEHOLDER` is updated (requiring a `###` verdict heading instead would close
-that, at the price of a double-post whenever the agent's summary format drifts).
-It is idempotent and never fails the job.
+**The safety net looks for the verdict, not the header.** A final `Ensure review
+verdict reached the PR` step treats the verdict as delivered only if this run's
+bot comment has, after the one-line header and its `---` line, the `###` verdict
+heading (🔴 / 🟡 / 🟢) the prompt mandates, outside code fences and `<details>`
+blocks (the same view the backstop classifies on). A body that is still the
+placeholder, or only an interim checklist, has none. Otherwise it posts the agent's result
+text as a comment, recovering the case where the progress comment never got a
+verdict. It does not key on the "Claude finished" header, which the action adds
+even over a placeholder, and it does not compare against the placeholder text, so
+a reworded placeholder is caught too. The backstop and `Assess review
+completeness` key on the same heading. Any other layout or summary format reads
+as "not delivered", so drift costs a cosmetic double-post, never a suppressed
+verdict. It is idempotent and never fails the job.
 
 **An unfinished review is reported, not recovered.** A new `Assess review
 completeness` step marks a run incomplete when the result message's

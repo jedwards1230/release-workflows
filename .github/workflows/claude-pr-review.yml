@@ -1269,26 +1269,34 @@ jobs:
           # link back to THIS run (…/actions/runs/<run_id>). Once the run ends the
           # action rewrites it as "<header>\n\n---\n<body>", adding the "Claude
           # finished …" header whether or not the agent ever wrote a body — so
-          # the header proves nothing, and a body that is still the placeholder
-          # sits under it. The verdict reached the PR only if the body after that
-          # one-line header and its `---` line is non-empty and is not the
-          # placeholder. Any other layout reads as "not delivered", so layout
-          # drift costs a cosmetic double-post. The one blind spot is the action
-          # rewording its placeholder: the new text would read as a delivered
-          # body until PLACEHOLDER is updated. (Requiring a `###` verdict heading
-          # instead would close that, at the price of a double-post whenever the
-          # agent's summary format drifts.)
-          # (An earlier version matched a 120-char slice of the raw result, which
-          # never matched; the one after it matched the header, which the action
-          # also stamps over a placeholder, so it suppressed the fallback.)
-          # The action's initial progress-comment body (src/github/operations/
-          # comments/common.ts); update here if it changes.
-          PLACEHOLDER="I'll analyze this and get back to you."
+          # the header proves nothing. The body under it is the action's
+          # placeholder ("I'll analyze this and get back to you.") until the agent
+          # calls update_claude_comment, and may then be only an interim
+          # checklist. The verdict reached the PR only if that body, after the
+          # one-line header and its `---` line, has the `###` verdict heading the
+          # prompt mandates, outside code fences and <details> (the backstop
+          # classifies the same way; "Assess review completeness" keys on the
+          # heading too, without the stripping). Anything else reads as "not
+          # delivered", so drift
+          # in the action's layout or placeholder wording, or in the agent's
+          # summary format, costs a cosmetic double-post, never a suppressed
+          # verdict. (An earlier version matched a 120-char slice of the raw
+          # result, which never matched; the one after it matched the header,
+          # which the action also stamps over a placeholder.)
           DELIVERED=false
           while IFS= read -r ENCODED; do
             [ -n "$ENCODED" ] || continue
             PART=$(printf '%s' "$ENCODED" | jq -r . 2>/dev/null)
-            if [ -n "$PART" ] && [ "$PART" != "$PLACEHOLDER" ]; then
+            # Same view as the backstop: a heading quoted in a code fence or
+            # inside <details> is context, not the verdict.
+            SHOWN=$(awk '
+              /^[ \t]*(```|~~~)/ { fence = !fence; next }
+              fence { next }
+              /<details/ { depth++ }
+              depth == 0 { print }
+              /<\/details>/ { if (depth > 0) depth-- }
+            ' <<<"$PART")
+            if grep -Eq '^ {0,3}#{1,6}[[:space:]]+(🔴|🟡|🟢)' <<<"$SHOWN"; then
               DELIVERED=true
               break
             fi
@@ -1297,7 +1305,7 @@ jobs:
             | select(.body | test("/runs/'"$RUN_ID"'([^0-9]|$)"))
             | (.body | split("\n")
                | if length > 3 and .[1] == "" and .[2] == "---"
-                 then .[3:] | join("\n") | gsub("^\\s+|\\s+$"; "")
+                 then .[3:] | join("\n")
                  else "" end
                | @json)' 2>/dev/null)
           if [ "$DELIVERED" = "true" ]; then
