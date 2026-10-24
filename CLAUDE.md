@@ -151,12 +151,62 @@ trivial. Repos with a matching quality plugin should pass it via `extra_plugins`
 (e.g. `go-quality@jedwards1230-plugins`) so both the skill and its reviewer
 agent are available at review time.
 
-The verdict is delivered by `track_progress`'s live comment. As a safety net, a
-final `Ensure review verdict reached the PR` step posts the agent's result text
-as a comment **only if** it isn't already on the PR — recovering the case (seen
-on clean-pass re-reviews) where the progress comment is left as a placeholder
-and a passing review would otherwise leave no visible output. It's idempotent
-(no double-post when the progress comment worked) and never fails the job.
+**Delegation is foreground, and the review must finish before the turn ends.**
+The prompt tells the lead to set `run_in_background: false` on every Task call
+(all in one message so they run in parallel), wait for every agent to return
+before writing the verdict, and never end its turn, or write a "will post once
+the reviewer reports back" message, while one is outstanding. The run is
+headless, so it ends when the lead ends its turn and an agent still working is
+killed with it. Without the instruction the Agent tool starts a subagent in the
+background (seen on a caller's review in October 2026): the lead said it would
+post once the reviewer reported back, ended its turn, and the PR was left with
+the placeholder. The prompt is backed by `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+(documented in Claude Code's env-vars reference), which removes
+`run_in_background` from the subagent tool and stops subagents being moved to
+the background. It is set through the action's `settings` input (`env` key),
+not step env, and is always on: `settings` is one JSON input, so the Run step
+falls back to a literal JSON when the telemetry route emitted none, and the
+route step's JSON carries the key too. The prompt is the
+primary control and the env var is belt and braces; neither could be exercised
+end to end outside Actions, so the safety net below is what catches a lead that
+backgrounds anyway.
+
+**The agent writes the verdict; the action does not.** `claude-code-action`
+never posts the agent's final chat message. `track_progress` creates a
+placeholder comment up front ("I'll analyze this and get back to you."), and
+the comment only gets the summary when the agent calls
+`mcp__github_comment__update_claude_comment` with it as the whole body (the
+prompt tells it to, after its inline comments and after every delegated agent
+has returned). When the run ends the action prepends
+`**Claude finished @user's task in Ns** —— [View job](run URL)`, a blank line
+and `---` to whatever body is there, whether or not the agent ever wrote one, so
+a placeholder reads as a finished review.
+
+**The safety net is placeholder-aware.** A final `Ensure review verdict reached
+the PR` step treats the verdict as delivered only if this run's bot comment has
+a non-empty body after the one-line header and its `---` line that is not the
+placeholder (defined once as `PLACEHOLDER`). Otherwise it posts the agent's
+result text as a comment, recovering the case where the progress comment was
+never updated. It does not key on the "Claude finished" header, which the action
+adds even over a placeholder. Any other comment layout reads as "not delivered",
+so layout drift costs a cosmetic double-post, never a suppressed verdict. It is
+idempotent and never fails the job.
+
+**An unfinished review is reported, not recovered.** A new `Assess review
+completeness` step marks a run incomplete when the result message's
+`subagent_stats` shows delegated agents that never reported back
+(`spawned > completed + failed`, missing fields count as 0; a `failed` agent
+reported back, a `killed` one did not), or when an agent was started in the
+background (`started_in_background > 0`) and the lead never wrote a `###`
+verdict heading (the agent can finish just after the lead exits, so the counts
+alone read as balanced). For an incomplete run the safety net does not post the
+lead's result text, which is only "waiting on the reviewer". It posts one
+notice per run attempt, marked `<!-- claude-review-incomplete run=… attempt=…
+-->`: "Review incomplete: N delegated agent(s) had not finished when the lead
+agent exited — re-run the review." The request-changes backstop never dismisses
+on a clear verdict from an incomplete review, since the missing agent may be the
+one that would have found the blocker. `is_error` takes precedence over all of
+this.
 
 **Failure surfacing.** `claude-code-action` exits 0 even when the agent run
 itself errored — a `401` (expired `CLAUDE_CODE_OAUTH_TOKEN` or bad/rotated
@@ -170,7 +220,11 @@ execution output at all — the expected `claude-code-action` workflow-validatio
 skip (the PR's workflow file differs from the default branch, e.g. a PR that
 edits the workflow or whose branch predates a workflow change on `main`) — it
 does **not** fail, but emits a `::warning::` + summary note so the no-review is
-visible (rebase the PR onto the default branch to get a review).
+visible (rebase the PR onto the default branch to get a review). The same step
+also fails the job, with an `::error title=Claude review incomplete` annotation
+and a step-summary block, when `Assess review completeness` flagged the run
+incomplete (see above): `is_error` is false there, so without this a review the
+lead abandoned mid-delegation would stay green.
 
 **Skipped by default.** The `review` job's `if:` skips **draft** PRs (opt out
 per repo with `review_drafts: true`) and **Dependabot** PRs (not configurable)
@@ -235,8 +289,10 @@ clear; a 🔴 in prose or a table, or a heading quoted inside a code fence or a
 step) + `CHANGES_REQUESTED` + the body marker. A blocking verdict with one of
 ours outstanding changes nothing; with none outstanding (the agent forgot, or
 the wrapper failed) the step submits one itself as `github-actions[bot]`. A
-clear verdict dismisses every one of ours. No verdict heading (an errored,
-cancelled, docs-only-skipped, or unfinished run) changes nothing. The step is
+clear verdict dismisses every one of ours, unless the run is incomplete
+(`Assess review completeness`): a verdict written while a delegated agent was
+still outstanding dismisses nothing. No verdict heading (an errored, cancelled,
+docs-only-skipped, or unfinished run) changes nothing. The step is
 best-effort: an API failure (a fork PR with a read-only token, a PR authored by
 the same account, a dismissal restriction) is a `::warning::` and a job-summary
 line, never a red check. It needs no permission beyond the

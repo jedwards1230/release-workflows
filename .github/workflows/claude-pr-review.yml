@@ -871,7 +871,10 @@ jobs:
               # env go through its `settings` input instead (merged into
               # ~/.claude/settings.json; user-level env is honored for these).
               # No secrets here — the bearer key stays in step env below.
+              # `settings` is a single JSON input, so this JSON must also carry
+              # the always-on key the Run step falls back to when it is empty.
               echo "settings=$(jq -nc '{env: {
+                CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1",
                 CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
                 OTEL_TRACES_EXPORTER: "otlp",
                 OTEL_TRACES_EXPORT_INTERVAL: "1000",
@@ -921,7 +924,14 @@ jobs:
           OTEL_LOGS_EXPORT_INTERVAL: ${{ steps.route.outputs.telemetry == 'true' && '1000' || '' }}
           OTEL_RESOURCE_ATTRIBUTES: ${{ steps.route.outputs.resource_attributes }}
         with:
-          settings: ${{ steps.route.outputs.settings }}
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 (documented in the Claude
+          # Code env-vars reference) removes `run_in_background` from the
+          # subagent tool and stops subagents being moved to the background, so
+          # the lead waits for every delegated agent. This run is headless: a
+          # backgrounded agent dies when the lead ends its turn, and the PR is
+          # left with the progress-comment placeholder. The route step's JSON
+          # (telemetry on) carries the same key.
+          settings: ${{ steps.route.outputs.settings || '{"env":{"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS":"1"} }' }}
           # Prefer the subscription OAuth token; fall back to the metered API
           # key only when no OAuth token was passed. Exactly one is ever set —
           # claude-code-action does not arbitrate between the two, so the
@@ -1015,6 +1025,17 @@ jobs:
             the relevant file paths or hunks, and the specific concern. Fold
             their findings into your own verdict; you own the final review.
 
+            Delegate in the FOREGROUND. Set `run_in_background: false` on every
+            Task call (when the tool takes that parameter) and send all of them
+            in one message, so they run in parallel while you wait. This run is
+            headless: it ends the moment you end your turn, and an agent still
+            working is killed with it, so its findings are lost and the PR gets
+            no review. Wait for every delegated agent to return before you write
+            your verdict. Never end your turn, and never write a "will post once
+            the reviewer reports back" message, while a delegated agent is
+            outstanding. If an agent errors or returns nothing usable, say so in
+            your summary and finish the review with what you have.
+
             Skip both only for the trivial class (pure docs, comments, plain
             config-value edits such as a changed default or version pin, or a
             dependency bump with no logic change) and review those directly.
@@ -1046,12 +1067,20 @@ jobs:
             approximately-anchored comment beats a prose-only finding. Never
             downgrade a finding to prose because pinning the line is fiddly.
 
-            Your summary (the final message track_progress posts to the PR) is
-            RANKED, not flat: what the reader must act on stays visible, and
-            everything else goes behind collapsed <details> blocks. A verdict
-            buried under a checklist and a list of strengths reads as heavy even
-            when it says "nothing to do" — the reader should learn the outcome
-            without scanning.
+            Your summary is the PR's progress comment, and only you write it:
+            call `mcp__github_comment__update_claude_comment` with the summary as
+            the whole `body`. The workflow never posts your final chat message,
+            so a run that ends without that call leaves the PR showing the
+            "I'll analyze this and get back to you." placeholder and no review.
+            Make the call once your inline comments are posted and every
+            delegated agent has returned, and never end your turn without having
+            made it.
+
+            That summary is RANKED, not flat: what the reader must act on stays
+            visible, and everything else goes behind collapsed <details>
+            blocks. A verdict buried under a checklist and a list of strengths
+            reads as heavy even when it says "nothing to do" — the reader should
+            learn the outcome without scanning.
 
             Shape it exactly like this, with the verdict as an H3 (`###`, never
             `##`):
@@ -1123,47 +1152,149 @@ jobs:
 
             ${{ steps.compose.outputs.draft_prompt }}
 
+      # One definition of "the lead exited with delegated work outstanding",
+      # read by the three steps below. The headless run ends when the lead ends
+      # its turn, and a subagent still running then is killed with it; the
+      # result is still `is_error: false` and `stop_reason: end_turn`, so
+      # nothing else marks it. Two signals, both from the result message:
+      #   - subagent_stats.spawned > completed + failed (absent = 0). `failed`
+      #     is its own terminal state: an agent that errored reported back, the
+      #     lead can finish without it. `killed` stays counted as unfinished;
+      #     the CLI books -p giving up on a running background agent there.
+      #   - an agent was started in the background and the lead never wrote a
+      #     `###` verdict heading (the agent can finish just after the lead
+      #     exits, so the counts alone read as balanced). The heading test is
+      #     the Request-changes backstop's, minus its spinner strip, its
+      #     `.result` fallback and its code-fence / <details> stripping.
+      # A run where `is_error` is true is the failure step's business, which it
+      # checks first, so this step does not look at it.
+      - name: Assess review completeness
+        id: assess
+        if: always()
+        run: |
+          set +e
+          EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
+          INCOMPLETE=false
+          DETAIL=""
+          if [ -f "$EXEC_FILE" ]; then
+            OPEN=$(jq -r 'last | ((.subagent_stats.spawned // 0) - (.subagent_stats.completed // 0) - (.subagent_stats.failed // 0)) | if . > 0 then . else 0 end' "$EXEC_FILE" 2>/dev/null)
+            BG=$(jq -r 'last | .subagent_stats.started_in_background // 0' "$EXEC_FILE" 2>/dev/null)
+            case "$OPEN" in ''|*[!0-9]*) OPEN=0 ;; esac
+            case "$BG" in ''|*[!0-9]*) BG=0 ;; esac
+            if [ "$OPEN" -gt 0 ]; then
+              INCOMPLETE=true
+              DETAIL="$OPEN delegated agent(s) had not finished when the lead agent exited"
+            elif [ "$BG" -gt 0 ]; then
+              VERDICT=$(jq -r '
+                def has_verdict: test("(^|\n) {0,3}#{1,6}[ \t]+(🔴|🟡|🟢)");
+                ([.[]? | select(.type == "assistant" and .parent_tool_use_id == null)
+                  | .message.content[]?
+                  | select(.type == "tool_use" and .name == "mcp__github_comment__update_claude_comment")
+                  | (.input.body // empty) | select(has_verdict)] | last) // empty' "$EXEC_FILE" 2>/dev/null)
+              if [ -z "$VERDICT" ]; then
+                INCOMPLETE=true
+                DETAIL="a delegated agent was started in the background and the lead agent exited without writing a verdict"
+              fi
+            fi
+          fi
+          echo "incomplete=$INCOMPLETE" >> "$GITHUB_OUTPUT"
+          echo "detail=$DETAIL" >> "$GITHUB_OUTPUT"
+          [ "$INCOMPLETE" = "true" ] && echo "review incomplete: $DETAIL"
+          exit 0
+
       - name: Ensure review verdict reached the PR
         if: always()
         env:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          INCOMPLETE: ${{ steps.assess.outputs.incomplete }}
+          INCOMPLETE_DETAIL: ${{ steps.assess.outputs.detail }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Safety net for a track_progress gap: claude-code-action posts the
-          # agent's final message to the PR via its live "progress" comment, but
-          # on some runs (observed on clean-pass re-reviews) that comment is left
-          # as the placeholder and the verdict never reaches the PR — so a passing
-          # review looks identical to "nothing happened". Recover it here: if the
-          # agent produced a successful result and it isn't already on the PR,
-          # post it as a comment. Idempotent (won't double-post when the progress
-          # comment worked) and never fails the job.
+          # Safety net for a track_progress gap. claude-code-action never posts
+          # the agent's final message: the progress comment only gets the summary
+          # when the agent itself calls update_claude_comment. When the run ends
+          # the action prepends a "Claude finished …" header to whatever body is
+          # there, so a comment left as the placeholder still reads as finished.
+          # Recover here: if the agent produced a successful result and no real
+          # verdict is on the PR, post the result as a comment. Idempotent (won't
+          # double-post when the progress comment worked) and never fails the job.
+          #
+          # An INCOMPLETE review (see "Assess review completeness") has no result
+          # worth recovering: the lead's last words are "waiting on the reviewer",
+          # not a verdict. Post a notice instead; the failure step goes red.
           set +e
           EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
           [ -f "$EXEC_FILE" ] || { echo "no execution output; nothing to recover"; exit 0; }
 
           IS_ERROR=$(jq -r 'last | .is_error // false' "$EXEC_FILE" 2>/dev/null)
           RESULT=$(jq -r 'last | .result // empty' "$EXEC_FILE" 2>/dev/null)
-          if [ "$IS_ERROR" = "true" ] || [ -z "$RESULT" ]; then
+          if [ "$IS_ERROR" = "true" ]; then
+            echo "no successful result text to post (is_error=$IS_ERROR); skipping"
+            exit 0
+          fi
+
+          if [ "$INCOMPLETE" = "true" ]; then
+            # One notice per run attempt, found again by its marker.
+            MARKER="<!-- claude-review-incomplete run=$RUN_ID attempt=$RUN_ATTEMPT -->"
+            POSTED=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
+              --jq '.[] | select(.user.type == "Bot") | select(.body | contains("'"$MARKER"'")) | .id' 2>/dev/null)
+            if [ -n "$POSTED" ]; then
+              echo "incomplete-review notice already on the PR; nothing to do"
+              exit 0
+            fi
+            echo "review incomplete ($INCOMPLETE_DETAIL); posting notice instead of a verdict"
+            {
+              printf '%s\n\n' "$MARKER"
+              printf '**Review incomplete:** %s — re-run the review. Treat the progress comment above as provisional: it may be missing findings from the delegated agents. [Run](%s)\n' \
+                "$INCOMPLETE_DETAIL" "$GITHUB_SERVER_URL/$REPO/actions/runs/$RUN_ID"
+            } > "${RUNNER_TEMP}/incomplete.md"
+            if gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "${RUNNER_TEMP}/incomplete.md"; then
+              echo "incomplete-review notice posted"
+            else
+              echo "WARN: failed to post incomplete-review notice"
+            fi
+            exit 0
+          fi
+
+          if [ -z "$RESULT" ]; then
             echo "no successful result text to post (is_error=$IS_ERROR); skipping"
             exit 0
           fi
 
           # Idempotency keyed on this run's id, not a fuzzy content slice.
           # claude-code-action's track_progress posts its comment as a bot with a
-          # "View job" link back to THIS run (…/actions/runs/<run_id>), and once
-          # done its header reads "Claude finished …'s task in …". If a bot comment
-          # for this run carries that finished header, the verdict already reached
-          # the PR — skip the fallback. Matching the positive "finished" signal
-          # fails safe: if the header ever drifts the worst case is a cosmetic
-          # double-post, not a suppressed verdict (the case this net guards).
-          # (The prior approach matched a 120-char slice of the raw result against
-          # the reformatted progress comment; it never matched, so the fallback
-          # double-posted on every run.)
-          RUN_COMMENT=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate \
-            --jq ".[] | select(.user.type==\"Bot\") | select(.body | contains(\"/runs/$RUN_ID\")) | .body" 2>/dev/null)
-          if printf '%s' "$RUN_COMMENT" | grep -qiF "Claude finished"; then
+          # link back to THIS run (…/actions/runs/<run_id>). Once the run ends the
+          # action rewrites it as "<header>\n\n---\n<body>", adding the "Claude
+          # finished …" header whether or not the agent ever wrote a body — so
+          # the header proves nothing, and a body that is still the placeholder
+          # sits under it. The verdict reached the PR only if the body after that
+          # one-line header and its `---` line is non-empty and is not the
+          # placeholder. Any other layout reads as "not delivered": the check
+          # fails safe, so drift costs a cosmetic double-post, never a suppressed
+          # verdict (the case this net guards).
+          # (An earlier version matched a 120-char slice of the raw result, which
+          # never matched; the one after it matched the header, which did.)
+          PLACEHOLDER="I'll analyze this and get back to you."
+          DELIVERED=false
+          while IFS= read -r ENCODED; do
+            [ -n "$ENCODED" ] || continue
+            PART=$(printf '%s' "$ENCODED" | jq -r . 2>/dev/null)
+            if [ -n "$PART" ] && [ "$PART" != "$PLACEHOLDER" ]; then
+              DELIVERED=true
+              break
+            fi
+          done < <(gh api "repos/$REPO/issues/$PR_NUMBER/comments" --paginate --jq '
+            .[] | select(.user.type == "Bot")
+            | select(.body | test("/runs/'"$RUN_ID"'([^0-9]|$)"))
+            | (.body | split("\n")
+               | if length > 3 and .[1] == "" and .[2] == "---"
+                 then .[3:] | join("\n") | gsub("^\\s+|\\s+$"; "")
+                 else "" end
+               | @json)' 2>/dev/null)
+          if [ "$DELIVERED" = "true" ]; then
             echo "track_progress verdict for this run reached the PR; no fallback needed"
             exit 0
           fi
@@ -1191,6 +1322,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           RUN_ID: ${{ github.run_id }}
+          INCOMPLETE: ${{ steps.assess.outputs.incomplete }}
+          INCOMPLETE_DETAIL: ${{ steps.assess.outputs.detail }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # Backstop for the request-changes review. On a blocking verdict the
@@ -1204,7 +1337,11 @@ jobs:
           #   - blocking verdict, none of our reviews outstanding -> submit one
           #                                  (the agent forgot, or its wrapper failed)
           #   - blocking verdict, one already outstanding         -> leave it
-          #   - clear verdict (🟡 / 🟢)                            -> dismiss ours
+          #   - clear verdict (🟡 / 🟢)                            -> dismiss ours,
+          #                                  unless the review is incomplete (a
+          #                                  delegated agent never reported back,
+          #                                  so a clear verdict may be missing its
+          #                                  findings) -> do nothing
           #   - no verdict found                                  -> do nothing
           # Our reviews are told apart by author (claude[bot], from the agent's
           # wrapper, or github-actions[bot], from this step) + CHANGES_REQUESTED +
@@ -1269,6 +1406,14 @@ jobs:
             BLOCKING=false
           else
             echo "> Request changes: skipped — no verdict heading outside code or <details> blocks; any existing review is left in place." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # A clear verdict from a review that did not finish must never withdraw
+          # a request for changes: the delegated agent that never reported back
+          # may be the one that would have found the blocking issue.
+          if [ "$BLOCKING" = "false" ] && [ "${INCOMPLETE:-false}" = "true" ]; then
+            echo "> Request changes: skipped — clear verdict from an incomplete review ($INCOMPLETE_DETAIL); any existing review is left in place." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -1388,6 +1533,9 @@ jobs:
 
       - name: Fail if the review did not complete
         if: always()
+        env:
+          INCOMPLETE: ${{ steps.assess.outputs.incomplete }}
+          INCOMPLETE_DETAIL: ${{ steps.assess.outputs.detail }}
         run: |
           # claude-code-action exits 0 even when the agent run itself errored
           # (e.g. a 401 from a bad/rotated ANTHROPIC_API_KEY, a 429 rate limit, or
@@ -1395,6 +1543,9 @@ jobs:
           # the step — and therefore the whole job — stays green. A broken review
           # then looks identical to a clean pass. Convert that into a real failure
           # so an outage surfaces as a red check instead of a silent no-op.
+          # The same goes for a review the lead abandoned with delegated agents
+          # still outstanding ("Assess review completeness"): `is_error` is false
+          # there, so it is checked separately below.
           set -uo pipefail
           EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
 
@@ -1427,6 +1578,17 @@ jobs:
               echo "Common causes: **401** expired \`CLAUDE_CODE_OAUTH_TOKEN\` (no auto-refresh — regenerate with \`claude setup-token\`) or bad/rotated \`ANTHROPIC_API_KEY\`, **429** rate limit, **529** Anthropic overload. Failing the check so this isn't mistaken for a clean pass."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error title=Claude review failed::Agent returned is_error=true (api_error_status=$STATUS, subtype=$SUBTYPE) — no review performed."
+            exit 1
+          fi
+
+          if [ "${INCOMPLETE:-false}" = "true" ]; then
+            {
+              echo ""
+              echo "### ❌ Claude review did not finish"
+              echo ""
+              echo "The lead agent ended its turn with delegated work outstanding ($INCOMPLETE_DETAIL), so the review was cut short and any verdict above is not complete. Failing the check so this isn't mistaken for a clean pass. Re-run the review."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Claude review incomplete::$INCOMPLETE_DETAIL — no complete review was produced. Re-run the review."
             exit 1
           fi
 
