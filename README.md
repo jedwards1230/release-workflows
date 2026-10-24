@@ -100,6 +100,17 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+### Claude PR Review (`claude-pr-review.yml`)
+
+Reusable AI pull-request review built on `anthropics/claude-code-action`. Every input is optional. The full input, secret, and behavior reference is in [CLAUDE.md](CLAUDE.md#claude-pr-reviewyml--claude-pr-review); the inputs below control what a review does when it finds a **blocking** issue (a correctness bug, a security or data-integrity flaw, a broken build/interface, or clearly wrong behavior; never nits or style).
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `request_changes_on_blocking` | A blocking review submits a formal `REQUEST_CHANGES` review, authored by `claude[bot]`; a later review that finds no blocking issue dismisses it. The agent submits it through a generated wrapper that takes no arguments and can only request changes on this PR. It is never given raw `gh pr review`, which would also allow `--approve`. A workflow step backstops it: it submits the review if the agent did not, and does the dismissing. Opt out with `request_changes_on_blocking: false`. | `true` |
+| `draft_on_blocking` | A blocking review also converts the PR to a draft (`gh pr ready --undo`), pausing automatic re-reviews until the author marks it ready for review. | `false` |
+
+Without drafting, every push re-reviews (more runs) and a request for changes clears itself on the next review that finds no blocking issue. With `draft_on_blocking: true`, the clearing review only runs once the author marks the PR ready for review. A docs-only skip or an errored review leaves an existing request in place until the next completed review. Callers that set `draft_on_blocking: true` explicitly keep drafting. Where the base branch requires no approving reviews (`required_approving_review_count: 0`, as on this repo's own ruleset), a `CHANGES_REQUESTED` review is expected to be advisory rather than merge-blocking; verify on rollout.
+
 ## Version Pinning
 
 You can pin to specific versions of these workflows:
