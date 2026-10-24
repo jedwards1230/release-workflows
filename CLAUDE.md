@@ -196,6 +196,53 @@ recognizes the same deliberate-skip condition and exits early — it does NOT
 fall through to the generic "no execution output" warning path (that path is
 reserved for the unexpected workflow-validation skip).
 
+**Blocking reviews.** Two independent inputs act on the same signal. The agent
+decides, after posting its inline comments and before writing the summary,
+whether the review found a BLOCKING issue (a correctness bug, a security or
+data-integrity flaw, a broken build/interface, or clearly wrong behavior,
+raised as an inline comment; never nits, style, or "consider" suggestions) and
+leads its `###` verdict heading with 🔴 if and only if it did.
+
+- `draft_on_blocking` (default on): the agent also runs `gh pr ready N --undo`,
+  which is the only reason `Bash(gh pr ready:*)` is granted, and only when this
+  input is on.
+- `request_changes_on_blocking` (default off): a `Request changes on a blocking
+  review` step, after `Ensure review verdict reached the PR`, submits a formal
+  `REQUEST_CHANGES` review as `github-actions[bot]`. The agent runs no command
+  for this: `gh pr review` and `gh api` stay on the deny floor (a granted
+  `gh pr review` would also allow `--approve`, and prefix rules are
+  bypassable). The step reads the verdict from the execution output: the last
+  main-thread `update_claude_comment` call whose body has a `###` verdict
+  heading (the run's final `result` text is only a prose recap, so it is a
+  fallback). A markdown heading that starts with 🔴 is blocking and one that
+  starts with 🟡 or 🟢 is clear; a 🔴 in prose or a table, or a heading quoted
+  inside a code fence or a `<details>` block, never counts. Our reviews are
+  identified by `github-actions[bot]` + `CHANGES_REQUESTED` + the body marker
+  `<!-- claude-review-request-changes -->`. A blocking verdict with none
+  outstanding submits one; with one outstanding it leaves it (so a re-review
+  does not stack them); a clear verdict dismisses them. No verdict heading (an
+  errored, cancelled, docs-only-skipped, or unfinished run) changes nothing. The
+  step is best-effort: an API failure (fork PR with a read-only token, a PR
+  authored by the same bot, a dismissal restriction) is a `::warning::` and a
+  job-summary line, never a red check. It needs no permission beyond the
+  `pull-requests: write` the job already holds.
+
+How the two interact: with `draft_on_blocking` on, a blocking review drafts the
+PR, and draft PRs are skipped, so the review that clears the request only runs
+after the author marks the PR ready for review. With it off, every push
+re-reviews, so a fixed PR clears itself on the next push. A docs-only skip, an
+errored or unfinished review, and a cancelled run all leave an existing request
+in place until the next completed review (the step dismisses only on a positive
+🟡/🟢 verdict, never on silence). A blocker from an earlier round that is still
+unaddressed counts as blocking: the prompt tells the agent to lead with 🔴 for
+it even though it does not re-post the comment.
+
+Caveat: this repo's ruleset has `required_approving_review_count: 0`, so a
+`CHANGES_REQUESTED` review is expected to be advisory rather than merge-blocking
+wherever approvals are not required. Verify on first rollout before relying on
+it as a gate. Callers opt in per repo with `with: request_changes_on_blocking:
+true`.
+
 **Required permissions on the caller:** `contents: read`, `actions: read`,
 `pull-requests: write`, `id-token: write`
 
@@ -291,6 +338,7 @@ the same change.
 | `permission_mode` | `""` | `""` = allowlist only (other tool calls silently denied). `auto` = Claude Code auto mode: non-allowlisted calls go to the safety classifier (extra model call, default Sonnet 5 — must be routable through LiteLLM) instead of being denied, so the agent can run read-only verification. A fixed deny list (Edit/Write, push/commit, `gh pr merge/close/review`, `gh api`, curl/wget/nc, WebFetch) applies in every mode. `bypassPermissions` is rejected. |
 | `allowed_bots` | `github-actions` | Bot actors allowed to trigger review |
 | `draft_on_blocking` | `true` | ON by default. A review that posts blocking inline comments flips the PR to draft (`gh pr ready --undo`), pausing auto-reviews until the author resolves threads and marks it ready. Batches re-reviews on churn-heavy PRs into author-controlled cycles — the main run-count/cost reducer. Opt out with `draft_on_blocking: false` where bot-initiated drafting is unwanted. |
+| `request_changes_on_blocking` | `false` | OFF by default (opt-in). A review that posts blocking inline comments (same bar as `draft_on_blocking`) gets a formal GitHub `REQUEST_CHANGES` review submitted as `github-actions[bot]`; a later review that finds no blocking issue dismisses it. A workflow step does the submitting, from the agent's 🔴 verdict heading — the agent is never given `gh pr review` or `gh api`, so it cannot approve. Independent of `draft_on_blocking`; see **Blocking reviews** above. |
 | `review_drafts` | `false` | When true, disables the default draft-PR skip so draft PRs get reviewed too. |
 | `skip_docs_only` | `true` | When true (default), skip review when every changed file is markdown. Set false to always review docs changes. |
 

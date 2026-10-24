@@ -48,6 +48,16 @@
 #           - html/template vs text/template misuse (XSS).
 #         system_packages: libdbus-1-dev   # apt packages the repo's build needs
 #
+# `draft_on_blocking` (default ON) and `request_changes_on_blocking` (opt-in,
+# default off) act on the same signal: the agent decides whether the review
+# found a BLOCKING issue (a correctness bug, security or data-integrity flaw,
+# broken build/interface, or clearly wrong behavior, raised as an inline
+# comment) and marks its summary with a 🔴 verdict heading if so. The first
+# drafts the PR (`gh pr ready --undo`, run by the agent). The second makes the
+# workflow itself submit a formal REQUEST_CHANGES review as github-actions[bot]
+# and dismiss it again when a later review finds no blocking issue; the agent
+# is never given `gh pr review`, so it cannot approve. The two are independent.
+#
 # `permission_mode: auto` (opt-in, default off) runs the agent in Claude Code's
 # auto permission mode: a classifier model approves or blocks each tool call
 # outside the allowlist instead of the headless run silently denying it, so the
@@ -128,6 +138,25 @@ on:
         required: false
         type: boolean
         default: true
+      request_changes_on_blocking:
+        description: >-
+          OFF by default (opt-in). When a review posts one or more BLOCKING inline
+          comments (same bar as `draft_on_blocking`), the workflow submits a formal
+          GitHub `REQUEST_CHANGES` review on the PR as github-actions[bot]; a later
+          review that finds no blocking issue dismisses it again. The agent only
+          decides whether the review is blocking (a 🔴 verdict heading) and is
+          never given `gh pr review`, so it cannot approve: the workflow submits
+          and dismisses the review itself, best-effort (an API failure is a
+          warning, never a red check). Independent of `draft_on_blocking`. With
+          drafting on, the clearing review only runs once the author marks the PR
+          ready for review; with it off, every push re-reviews, so the request
+          clears itself. A docs-only skip or an errored review leaves an existing
+          request in place until the next completed review. Where the base branch
+          requires no approving reviews this is expected to be advisory rather
+          than merge-blocking; verify on first rollout.
+        required: false
+        type: boolean
+        default: false
       review_drafts:
         description: >-
           When true, disables the default draft-PR skip so draft PRs get
@@ -337,6 +366,7 @@ jobs:
           EXTRA_MARKETPLACES: ${{ inputs.extra_plugin_marketplaces }}
           EXTRA_TOOLS: ${{ inputs.extra_allowed_tools }}
           DRAFT_ON_BLOCKING: ${{ inputs.draft_on_blocking }}
+          REQUEST_CHANGES_ON_BLOCKING: ${{ inputs.request_changes_on_blocking }}
           PERMISSION_MODE: ${{ inputs.permission_mode }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
@@ -438,17 +468,40 @@ jobs:
             echo "disallowed_tools=$DENY_TOOLS"
           } >> "$GITHUB_OUTPUT"
 
-          # Draft-on-blocking instruction block — emitted into the prompt only
-          # when the feature is on (empty otherwise, so the prompt is unchanged
-          # for repos that leave it off). Built with echo/printf lines, NOT a
-          # bash heredoc: a heredoc body and terminator must sit at column 0,
-          # which would terminate this YAML `run: |` block scalar.
+          # Blocking-issue instruction block — emitted into the prompt when
+          # draft_on_blocking and/or request_changes_on_blocking is on (empty
+          # when both are off, so the prompt is unchanged for repos that leave
+          # them off). The blocking bar and the "decide before the summary; 🔴
+          # verdict heading iff blocking" rule are shared; the drafting
+          # instructions (`gh pr ready --undo`) are added only for draft, and the
+          # request-changes wording only for request-changes. The agent runs no
+          # command for request-changes: the "Request changes on a blocking
+          # review" step submits that review from the 🔴 heading. Built with
+          # echo/printf lines, NOT a bash heredoc: a heredoc body and terminator
+          # must sit at column 0, which would terminate this YAML `run: |` block
+          # scalar.
+          DRAFT=false
+          RC=false
+          if [ "$DRAFT_ON_BLOCKING" = "true" ]; then DRAFT=true; fi
+          if [ "$REQUEST_CHANGES_ON_BLOCKING" = "true" ]; then RC=true; fi
           {
             echo "draft_prompt<<$DELIM"
-            if [ "$DRAFT_ON_BLOCKING" = "true" ]; then
-              echo '### Blocking issues → convert this PR to draft'
+            if [ "$DRAFT" = "true" ] || [ "$RC" = "true" ]; then
+              if [ "$DRAFT" = "true" ] && [ "$RC" = "true" ]; then
+                echo '### Blocking issues → convert this PR to draft and request changes'
+                FEATURES='draft-on-blocking and request-changes-on-blocking'
+                CLEAN_ACTION='convert to draft and do NOT use the 🔴 emoji'
+              elif [ "$DRAFT" = "true" ]; then
+                echo '### Blocking issues → convert this PR to draft'
+                FEATURES='draft-on-blocking'
+                CLEAN_ACTION='convert to draft'
+              else
+                echo '### Blocking issues → request changes'
+                FEATURES='request-changes-on-blocking'
+                CLEAN_ACTION='use the 🔴 emoji'
+              fi
               echo ''
-              echo 'This repo has draft-on-blocking enabled. AFTER you have posted all inline'
+              echo "This repo has ${FEATURES} enabled. AFTER you have posted all inline"
               echo 'comments and BEFORE you write your summary, decide whether this review found'
               echo 'any BLOCKING issue — the summary has to reflect that decision, so make it first.'
               echo ''
@@ -459,17 +512,48 @@ jobs:
               echo ''
               echo '- If you posted ONE OR MORE blocking inline comments: write the summary with the'
               echo '  🔴 verdict emoji, and in its VISIBLE part (never inside a <details> block)'
-              echo '  state plainly that you are setting the PR to draft to pause automatic'
-              echo '  re-reviews, and that the author should address the blocking inline comments,'
-              echo '  resolve those threads, and mark the PR "Ready for review" to request a fresh'
-              # shellcheck disable=SC2016 # the backticks are literal markdown
-              printf '  review. Then run `gh pr ready %s --undo` as your final action.\n' "$PR_NUMBER"
+              if [ "$DRAFT" = "true" ]; then
+                echo '  state plainly that you are setting the PR to draft to pause automatic'
+                echo '  re-reviews, and that the author should address the blocking inline comments,'
+                echo '  resolve those threads, and mark the PR "Ready for review" to request a fresh'
+                if [ "$RC" = "true" ]; then
+                  echo '  review. Also state plainly that this review is requesting changes and that the'
+                  echo '  next review that finds no blocking issues will clear the request. Run no'
+                  echo '  command for the request-changes part: the workflow submits that review itself.'
+                  # shellcheck disable=SC2016 # the backticks are literal markdown
+                  printf '  Then run `gh pr ready %s --undo` as your final action.\n' "$PR_NUMBER"
+                else
+                  # shellcheck disable=SC2016 # the backticks are literal markdown
+                  printf '  review. Then run `gh pr ready %s --undo` as your final action.\n' "$PR_NUMBER"
+                fi
+              else
+                echo '  state plainly that this review is requesting changes, that the author should'
+                echo '  address the blocking inline comments and resolve those threads, and that the'
+                echo '  next review that finds no blocking issues will clear the request. Run no'
+                echo '  command for this: the workflow submits the formal review itself.'
+              fi
               echo '- If you found NO blocking issues (clean, or only nits/suggestions): do NOT'
-              echo '  convert to draft. Leave the PR as-is.'
+              echo "  ${CLEAN_ACTION}. Leave the PR as-is."
+              if [ "$RC" = "true" ]; then
+                echo ''
+                # shellcheck disable=SC2016 # the backticks are literal markdown
+                echo 'The workflow reads your `###` verdict heading to tell whether the review is'
+                echo 'blocking: it leads with 🔴 if and only if the review has at least one blocking'
+                echo 'issue, and no other heading may start with 🔴. That includes a blocking issue'
+                echo 'from an earlier round that is still unaddressed: do not re-post its comment,'
+                echo 'but do lead with 🔴, because a clear verdict withdraws the request for changes.'
+              fi
               echo ''
-              echo 'Convert to draft at most once, and only when the bar above is genuinely met'
-              echo '— drafting is a strong signal, so do not use it for minor or discretionary'
-              echo 'feedback.'
+              if [ "$DRAFT" = "true" ]; then
+                echo 'Convert to draft at most once, and only when the bar above is genuinely met'
+                echo '— drafting is a strong signal, so do not use it for minor or discretionary'
+                echo 'feedback.'
+              fi
+              if [ "$RC" = "true" ]; then
+                if [ "$DRAFT" = "true" ]; then echo ''; fi
+                echo 'Requesting changes is a strong signal: do it only when the bar above is'
+                echo 'genuinely met, never for minor or discretionary feedback.'
+              fi
             fi
             echo "$DELIM"
           } >> "$GITHUB_OUTPUT"
@@ -1030,6 +1114,139 @@ jobs:
           else
             echo "WARN: failed to post fallback summary"
           fi
+          exit 0
+
+      - name: Request changes on a blocking review
+        if: ${{ !cancelled() && inputs.request_changes_on_blocking }}
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_ID: ${{ github.run_id }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Submit (or clear) a formal REQUEST_CHANGES review from the agent's
+          # verdict. The workflow does this, not the agent: `gh pr review` stays
+          # on the deny floor because it would also let the agent --approve, and
+          # prefix deny/allow rules are bypassable. The agent only decides
+          # whether the review is blocking, by leading its `###` verdict heading
+          # with 🔴 (see the compose step's prompt block).
+          #   - blocking verdict, none of our reviews outstanding -> submit one
+          #   - blocking verdict, one already outstanding         -> leave it
+          #   - clear verdict (🟡 / 🟢)                            -> dismiss ours
+          #   - no verdict found                                  -> do nothing
+          # Our reviews are told apart by github-actions[bot] + CHANGES_REQUESTED
+          # + a marker in the body. Best-effort: an API failure is a warning and
+          # a summary line, never a red check. Dismissal needs a positive 🟡/🟢
+          # verdict, so a missing, errored or unfinished review leaves an
+          # existing request untouched.
+          set +e
+          EXEC_FILE="${RUNNER_TEMP}/claude-execution-output.json"
+          MARKER='<!-- claude-review-request-changes -->'
+          RUN_URL="$GITHUB_SERVER_URL/$REPO/actions/runs/$RUN_ID"
+
+          if [ ! -f "$EXEC_FILE" ]; then
+            echo "> Request changes: skipped — no execution output (the review did not run); any existing review is left in place." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          IS_ERROR=$(jq -r 'last | .is_error // false' "$EXEC_FILE" 2>/dev/null)
+          if [ "$IS_ERROR" = "true" ]; then
+            echo "> Request changes: skipped — the review errored (is_error=true); any existing review is left in place." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Where the verdict lives. With track_progress the agent writes its
+          # `### <emoji> …` summary into the tracking comment through the
+          # update_claude_comment tool; the run's final `result` text is only a
+          # short prose recap ("The review is posted … no blocking issues"), so
+          # it carries no heading. Take the last main-thread update whose body
+          # has a verdict heading (a subagent's call has a parent_tool_use_id and
+          # is ignored), falling back to the final result text for a run that
+          # delivered the summary there instead. A leading track_progress
+          # spinner <img …> is dropped first.
+          VERDICT_MD=$(jq -r '
+            def clean: sub("^<img[^>]*>[ \t\r\n]*"; "");
+            def has_verdict: test("(^|\n) {0,3}#{1,6}[ \t]+(🔴|🟡|🟢)");
+            ([.[]? | select(.type == "assistant" and .parent_tool_use_id == null)
+              | .message.content[]?
+              | select(.type == "tool_use" and .name == "mcp__github_comment__update_claude_comment")
+              | (.input.body // empty) | clean | select(has_verdict)] | last)
+            // (last | .result // empty | clean | select(has_verdict))
+            // empty' "$EXEC_FILE" 2>/dev/null)
+          if [ -z "$VERDICT_MD" ]; then
+            echo "> Request changes: skipped — no verdict heading found (the review did not finish a summary); any existing review is left in place." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Classify on headings only: a markdown heading (up to 3 spaces of
+          # indent, 1-6 #) whose first content is the verdict emoji. A 🔴 in
+          # prose, a table, or the verdict legend never counts, and neither does
+          # a heading quoted inside a fenced code block or a <details> block
+          # (context, never the verdict), so those are stripped first. Here-strings
+          # rather than pipes into grep -q avoid SIGPIPE edge cases.
+          SHOWN=$(awk '
+            /^[ \t]*(```|~~~)/ { fence = !fence; next }
+            fence { next }
+            /<details/ { depth++ }
+            depth == 0 { print }
+            /<\/details>/ { if (depth > 0) depth-- }
+          ' <<<"$VERDICT_MD")
+          if grep -Eq '^ {0,3}#{1,6}[[:space:]]+🔴' <<<"$SHOWN"; then
+            BLOCKING=true
+          elif grep -Eq '^ {0,3}#{1,6}[[:space:]]+(🟡|🟢)' <<<"$SHOWN"; then
+            BLOCKING=false
+          else
+            echo "> Request changes: skipped — no verdict heading outside code or <details> blocks; any existing review is left in place." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # --jq runs per page, so --paginate stays correct for long histories.
+          # The marker is a constant, so interpolating it into the filter is safe.
+          # stdout is kept apart from stderr so a CLI notice can never be read as
+          # a review id; only all-digit lines are accepted as ids.
+          if ! EXISTING=$(gh api "repos/$REPO/pulls/$PR_NUMBER/reviews" --paginate \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and .state == \"CHANGES_REQUESTED\" and ((.body // \"\") | contains(\"$MARKER\"))) | .id" 2>"${RUNNER_TEMP}/rc-list.err"); then
+            echo "::warning title=Request changes skipped::Could not list the PR's reviews: $(head -c 300 "${RUNNER_TEMP}/rc-list.err" | tr '\n' ' ')"
+            echo "> Request changes: skipped — could not list existing reviews; no change made." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          EXISTING=$(printf '%s\n' "$EXISTING" | grep -E '^[0-9]+$')
+
+          if [ "$BLOCKING" = "true" ]; then
+            if [ -n "$EXISTING" ]; then
+              echo "> Request changes: already present — blocking review, and a changes-requested review from this workflow is already outstanding." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            BODY=$(printf '%s\n\n%s\n\n%s\n' "$MARKER" \
+              "**Changes requested.** The automated review found one or more blocking issues. See the inline comments and the review summary for details. Resolve the blocking threads and push a fix or mark the PR ready for review; the next review that finds no blocking issues clears this automatically." \
+              "[Review run]($RUN_URL)")
+            if OUT=$(gh api -X POST "repos/$REPO/pulls/$PR_NUMBER/reviews" \
+              -f event=REQUEST_CHANGES -f commit_id="$HEAD_SHA" -f body="$BODY" 2>&1); then
+              echo "> Request changes: submitted a REQUEST_CHANGES review (blocking issues found)." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "::warning title=Request changes failed::Could not submit the review: $(printf '%s' "$OUT" | head -c 300 | tr '\n' ' ')"
+              echo "> Request changes: failed to submit the review (see the warning annotation); blocking issues were found." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 0
+          fi
+
+          if [ -z "$EXISTING" ]; then
+            echo "> Request changes: nothing to do — no blocking issues, and no outstanding changes-requested review from this workflow." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          TOTAL=0
+          DISMISSED=0
+          for id in $EXISTING; do
+            TOTAL=$((TOTAL + 1))
+            if OUT=$(gh api -X PUT "repos/$REPO/pulls/$PR_NUMBER/reviews/$id/dismissals" \
+              -f event=DISMISS \
+              -f message="The latest review found no blocking issues. [Review run]($RUN_URL)" 2>&1); then
+              DISMISSED=$((DISMISSED + 1))
+            else
+              echo "::warning title=Request changes not dismissed::Could not dismiss review $id: $(printf '%s' "$OUT" | head -c 300 | tr '\n' ' ')"
+            fi
+          done
+          echo "> Request changes: dismissed $DISMISSED of $TOTAL changes-requested review(s) — the latest review found no blocking issues." >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Mark the cancelled run's progress comment

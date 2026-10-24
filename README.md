@@ -100,6 +100,17 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
+### Claude PR Review (`claude-pr-review.yml`)
+
+Reusable AI pull-request review built on `anthropics/claude-code-action`. Every input is optional. The full input, secret, and behavior reference is in [CLAUDE.md](CLAUDE.md#claude-pr-reviewyml--claude-pr-review); the inputs below control what a review does when it finds a **blocking** issue (a correctness bug, a security or data-integrity flaw, a broken build/interface, or clearly wrong behavior; never nits or style).
+
+| Input | Description | Default |
+|-------|-------------|---------|
+| `draft_on_blocking` | A blocking review converts the PR to a draft (`gh pr ready --undo`), pausing automatic re-reviews until the author marks it ready for review. | `true` |
+| `request_changes_on_blocking` | A blocking review makes the workflow submit a formal `REQUEST_CHANGES` review as `github-actions[bot]`; a later review that finds no blocking issue dismisses it. The agent is never given `gh pr review`, so it cannot approve. Independent of `draft_on_blocking`. Opt in with `with: request_changes_on_blocking: true`. | `false` |
+
+With both on, the request is cleared by the first review after the author marks the PR ready for review (drafts are skipped). With `draft_on_blocking: false`, every push re-reviews, so a fixed PR clears itself. A docs-only skip or an errored review leaves an existing request in place until the next completed review. Where the base branch requires no approving reviews (`required_approving_review_count: 0`, as on this repo's own ruleset), a `CHANGES_REQUESTED` review is expected to be advisory rather than merge-blocking; verify on first rollout.
+
 ## Version Pinning
 
 You can pin to specific versions of these workflows:
