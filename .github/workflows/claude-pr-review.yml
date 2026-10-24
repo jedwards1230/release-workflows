@@ -58,7 +58,9 @@
 # draft (`gh pr ready --undo`). It submits the review through a generated
 # wrapper script that takes no arguments and can only request changes on this
 # PR; raw `gh pr review` stays denied, because it would also let a
-# prompt-injected PR run `--approve`. A final workflow step is the backstop: it
+# prompt-injected PR run `--approve`. The review body is only a one- or
+# two-sentence pointer to the blocking inline comments and the summary comment,
+# which holds the verdict and detail. A final workflow step is the backstop: it
 # submits the review itself if the agent did not, and dismisses ours when a
 # later review is not blocking. The two inputs are independent.
 #
@@ -587,11 +589,12 @@ jobs:
               echo "  ${CLEAN_ACTION}. Leave the PR as-is."
               if [ "$RC" = "true" ]; then
                 echo ''
-                echo 'To submit the request for changes, run this command ONCE, with a short review'
-                echo 'body on stdin: what blocks the merge, a pointer to the blocking inline'
-                echo 'comments, and that the next review that finds no blocking issues clears the'
-                echo 'request. Use a quoted heredoc with the terminator alone at the start of its'
-                echo 'line:'
+                echo 'To submit the request for changes, run this command ONCE, with a review body of'
+                echo 'one sentence, or two at most, on stdin: that changes are requested, and a pointer'
+                echo 'to the blocking inline comments and to your review summary comment, which holds'
+                echo 'the full verdict and detail. Do not restate the findings or the verdict, and do'
+                echo 'not explain how the request is cleared. Use a quoted heredoc with the terminator'
+                echo 'alone at the start of its line:'
                 echo ''
                 echo '```'
                 echo "${RC_WRAPPER} <<'EOF'"
