@@ -276,8 +276,12 @@ re-post the comment but still leads with 🔴.
   path>:*)`. The wrapper reads the review body from stdin, refuses an empty
   body, appends the marker `<!-- claude-review-request-changes -->`, rejects
   every argument (so no `--approve`, `--comment`, or other PR), and runs exactly
-  `gh pr review <pr> --repo <repo> --request-changes --body-file -`. The deny
-  floor is byte-identical in every flag combination.
+  `gh pr review <pr> --repo <repo> --request-changes --body-file -`. The prompt
+  keeps the agent's review body to one sentence, two at most: changes are
+  requested, with a pointer to the blocking inline comments and the review
+  summary comment. The verdict and detail live only in that summary, so the
+  formal review does not restate them. The deny floor is byte-identical in every
+  flag combination.
 - `draft_on_blocking` (default off, opt-in): the agent also runs
   `gh pr ready N --undo`, which is the only reason `Bash(gh pr ready:*)` is
   granted, and only when this input is on. With both on, the request for changes
