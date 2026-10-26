@@ -782,7 +782,7 @@ jobs:
         if: ${{ steps.llm.outputs.join == 'true' }}
         continue-on-error: true
         timeout-minutes: 3
-        uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be390056cd # v4.2.0
+        uses: tailscale/github-action@99a8333667fff04fdd6cffb46dfd409f8329a7bf # v4.3.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
@@ -906,7 +906,7 @@ jobs:
       - name: Run Claude PR review
         id: claude
         if: ${{ !(inputs.skip_docs_only && steps.docsonly.outputs.skip == 'true') }}
-        uses: anthropics/claude-code-action@f27be6b65a4652f08a2ba3cff79114829b588967 # v1.0.252
+        uses: anthropics/claude-code-action@16f9f71ab9c490faf367f94dd294897edc25be33 # v1.0.261
         # Gateway + telemetry env. claude-code-action forwards only an allowlist
         # of env names to Claude (its action.yml re-declares them), so these are
         # exactly the allowlisted ones; the rest ride the `settings` input. Each
